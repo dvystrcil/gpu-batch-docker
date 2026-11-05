@@ -47,12 +47,20 @@ run_case() {  # $1 = case dir, $2 = printer state
  "expect_outputs": ["out/*.png"], "min_outputs": 1, "notify": null}
 JSON
   fake_moonraker "$2" > "$WORK/$1/fake.py"
-  set +e
-  docker run --rm -v "$WORK:/work" -e MOONRAKER_URL=http://127.0.0.1:7125 \
+  # docker cp, not -v: on the ARC runners docker is a DinD sidecar, so a
+  # bind mount names a path on the DAEMON's filesystem, where this mktemp
+  # dir does not exist. The container then saw an empty /work.
+  local ctr="gpu-batch-smoke-$1-$$"
+  docker create --name "$ctr" -e MOONRAKER_URL=http://127.0.0.1:7125 \
     --entrypoint sh "$IMG" -c \
-    "python3 /work/$1/fake.py & sleep 1; python3 -m gpu_batch.runner /work/$1/spec.json"
+    "python3 /work/$1/fake.py & sleep 1; python3 -m gpu_batch.runner /work/$1/spec.json" >/dev/null
+  docker cp "$WORK/." "$ctr:/work"
+  set +e
+  docker start -a "$ctr"
   rc=$?
   set -e
+  docker cp "$ctr:/work/$1/." "$WORK/$1/"
+  docker rm -f "$ctr" >/dev/null
   echo "$1: exit $rc"
   return 0
 }
