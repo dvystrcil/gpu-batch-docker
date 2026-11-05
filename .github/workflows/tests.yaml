@@ -1,0 +1,38 @@
+name: tests
+
+# Unit + composition tests for the gpu_batch runner. Hermetic: fake
+# moonraker and fake n8n over loopback, no printer, no cluster.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: gpu-batch-docker-runner
+    steps:
+      - uses: actions/checkout@v7
+
+      # 3.12 = the image's python3 (ubuntu:24.04). Testing on a newer one
+      # would not prove the shipped interpreter runs this code.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - run: python3 -m pip install --quiet pytest
+
+      - name: Unit tests
+        run: python3 -m pytest -q -p no:cacheprovider | tee pytest.out
+
+      # pytest exits 0 if a broken conftest collects a fraction of the suite.
+      - name: Assert the suite actually ran
+        run: |
+          set -euo pipefail
+          count=$(sed -n 's/^\([0-9][0-9]*\) passed.*/\1/p' pytest.out | tail -1)
+          [ -n "$count" ] || { echo "::error::could not read a pass count"; exit 1; }
+          echo "passed $count test(s)"
+          [ "$count" -ge 56 ] || { echo "::error::only $count passed; 56 existed when this check was written"; exit 1; }

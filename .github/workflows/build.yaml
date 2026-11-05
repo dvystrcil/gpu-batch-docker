@@ -1,0 +1,166 @@
+# Image build for the GPU batch lane (homelab#1935).
+#
+# Same three layers as the rest of the fleet: push :dev + :sha-<sha> from
+# main, release-action cuts a patch-bump release, docker-release.yaml
+# promotes :dev to X.Y.Z (no `v` on image tags), and the ImageUpdater CR in
+# dvystrcil/gpu-batch tracks the semver.
+#
+# Prerequisite: the `gpu-batch-docker-runner` ARC scale set in
+# dvystrcil/argocd-projects:arc/arc-build-runners.yaml.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'LICENSE'
+      - '.github/CODEOWNERS'
+  pull_request:
+  workflow_dispatch:
+
+env:
+  INTERNAL_REGISTRY: harbor-core.harbor.svc.cluster.local
+  PROJECT: ai
+  IMAGE_NAME: gpu-batch-blender
+
+jobs:
+  # Build and RUN the image before anything is pushed: a green docker build
+  # says nothing about whether Blender starts, the runner imports, or the
+  # guard refuses. CI has no GPU, so this renders on CPU (bin/smoke-test.sh).
+  smoke:
+    runs-on: gpu-batch-docker-runner
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image locally
+        run: docker build --target blender -t gpu-batch-blender:ci .
+
+      - name: Smoke-test the built image
+        run: bin/smoke-test.sh gpu-batch-blender:ci | tee smoke.out
+
+      # The script prints SMOKE-COMPLETE only as its last line; a crash that
+      # still exits 0 would not reach it.
+      - name: Assert the smoke test completed
+        run: grep -qx 'SMOKE-COMPLETE' smoke.out
+
+  build:
+    needs: smoke
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: gpu-batch-docker-runner
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # One named secret per step, never the whole store (see
+      # homelab/.github/workflows/build-homelab-bin.yaml for why).
+      - name: Fetch the Harbor username
+        uses: Infisical/secrets-action@v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: HB_USERNAME
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the Harbor password
+        uses: Infisical/secrets-action@v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: HB_PASSWORD
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the CICD App client id
+        uses: Infisical/secrets-action@v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: CICD_APP_CLIENT_ID
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the CICD App private key
+        uses: Infisical/secrets-action@v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: CICD_APP_PRIVATE_KEY
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Assert every scoped secret arrived
+        run: |
+          for v in HB_USERNAME HB_PASSWORD CICD_APP_CLIENT_ID CICD_APP_PRIVATE_KEY; do
+            [ -n "${!v}" ] || { echo "::error::$v not fetched — renamed in Infisical?"; exit 1; }
+          done
+
+      - name: Log in to Harbor (internal)
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.INTERNAL_REGISTRY }}
+          username: ${{ env.HB_USERNAME }}
+          password: ${{ env.HB_PASSWORD }}
+
+      - uses: docker/setup-buildx-action@v4
+        with:
+          buildkitd-config-inline: |
+            [registry."harbor-core.harbor.svc.cluster.local"]
+              ca=["/etc/ssl/certs/ca-certificates.crt"]
+
+      - name: Build + push (dev image)
+        env:
+          BUILDKIT_PROGRESS: plain
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: blender
+          # amd64 only: Blender's official tarball is x86-64, and the only
+          # consumer is the GTX 970 on k8s-node-03.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:dev
+            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      # The pushed artifact, not the smoke build, is what ships. Pull it back
+      # and assert it carries the pinned Blender and the runner.
+      - name: Assert the pushed image runs
+        run: |
+          IMG="${INTERNAL_REGISTRY}/${PROJECT}/${IMAGE_NAME}:sha-${GITHUB_SHA}"
+          docker run --rm --entrypoint blender "$IMG" --version | tee v.out
+          grep -q '^Blender 5\.2\.' v.out
+          docker run --rm "$IMG" --help | grep -q 'gpu-batch-run'
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ env.CICD_APP_CLIENT_ID }}
+          private-key: ${{ env.CICD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: gpu-batch-docker
+
+      - name: Create GitHub release
+        # Patch++ off the latest release; publishing fires docker-release.yaml.
+        uses: dvystrcil/release-action@v0.2.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
