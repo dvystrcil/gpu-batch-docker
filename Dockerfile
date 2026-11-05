@@ -1,6 +1,6 @@
 # GPU batch lane images (homelab#1935).
 #
-#   runner   ubuntu:24.04 + the gpu_batch runner (stdlib Python) + psql.
+#   runner   ubuntu:26.04 + the gpu_batch runner (stdlib Python) + psql.
 #            The base for every GPU batch workload. Not published on its own
 #            until a second workload needs it.
 #   blender  runner + Blender, published as harbor.sirddail.net/ai/gpu-batch-blender.
@@ -8,7 +8,7 @@
 # A new workload (ffmpeg, PyTorch, ...) is another `FROM runner AS <x>` stage
 # plus a build step, not a new repo.
 
-FROM ubuntu:24.04 AS runner
+FROM ubuntu:26.04 AS runner
 
 # psql: the guard's Obico tie-breaker (read-only role, column-level grant).
 # ca-certificates: the in-cluster API read of that role's Secret.

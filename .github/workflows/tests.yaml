@@ -17,11 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # 3.12 = the image's python3 (ubuntu:24.04). Testing on a newer one
+      # 3.14 = the image's python3 (ubuntu:26.04). Testing on a newer one
       # would not prove the shipped interpreter runs this code.
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - run: python3 -m pip install --quiet pytest
 
