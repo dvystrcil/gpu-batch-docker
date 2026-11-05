@@ -4,7 +4,7 @@ Build repo for the **GPU batch lane** on the GTX 970 (`k8s-node-03`): fire-and-f
 
 | Image | Contents |
 |---|---|
-| `harbor.sirddail.net/ai/gpu-batch-blender` | Ubuntu 24.04, Blender 5.2.2 LTS (official tarball, sha256-pinned), the `gpu_batch` runner, psql |
+| `harbor.sirddail.net/ai/gpu-batch-blender` | Ubuntu 26.04, Blender 5.2.2 LTS (official tarball, sha256-pinned), the `gpu_batch` runner, psql |
 
 Deployed by [`dvystrcil/gpu-batch`](https://github.com/dvystrcil/gpu-batch) (Job templates), submitted with `homelab/bin/gpu-batch-submit.py`.
 
@@ -28,7 +28,7 @@ Adding a workload: add a `FROM runner AS <name>` stage and a build step, plus a 
 ## Development
 
 ```bash
-python3 -m pytest -q                                   # unit + composition tests (python 3.12 = the image)
+python3 -m pytest -q                                   # unit + composition tests (python 3.14 = the image)
 docker build --target blender -t gpu-batch-blender:local .
 bin/smoke-test.sh gpu-batch-blender:local              # CPU render through the real entrypoint, plus a refusal
 ```

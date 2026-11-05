@@ -5,7 +5,7 @@
   ],
   "packageRules": [
     {
-      "description": "tests.yaml's python-version is the image's python3 (ubuntu:24.04 ships 3.12), so the tests prove the interpreter that ships. It moves only with the Dockerfile's base image, in the same PR. A lone bump is a 'minor' the fleet auto-merge gate would land (homelab#1935).",
+      "description": "tests.yaml's python-version is the image's python3 (ubuntu:26.04 ships 3.14), so the tests prove the interpreter that ships. It moves only with the Dockerfile's base image, in the same PR. A lone bump is a 'minor' the fleet auto-merge gate would land (homelab#1935).",
       "matchManagers": ["github-actions"],
       "matchDepNames": ["python"],
       "enabled": false
