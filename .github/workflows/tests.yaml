@@ -35,4 +35,4 @@ jobs:
           count=$(sed -n 's/^\([0-9][0-9]*\) passed.*/\1/p' pytest.out | tail -1)
           [ -n "$count" ] || { echo "::error::could not read a pass count"; exit 1; }
           echo "passed $count test(s)"
-          [ "$count" -ge 56 ] || { echo "::error::only $count passed; 56 existed when this check was written"; exit 1; }
+          [ "$count" -ge 62 ] || { echo "::error::only $count passed; 62 existed when this check was written"; exit 1; }

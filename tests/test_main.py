@@ -75,7 +75,7 @@ def test_idle_printer_runs_and_posts_success(fake, tmp_path):
 def test_printing_refuses_and_posts_refusal(fake, tmp_path):
     fake.printer_state = "printing"
     d = job(tmp_path, "import sys; open(sys.argv[1],'w').write('ok')")
-    assert runner.main([str(d / "spec.json")]) == runner.EXIT_REFUSED
+    assert runner.main([str(d / "spec.json")]) == runner.EXIT_OK  # reported: the Job is Complete
     assert not (d / "out.txt").exists()
     assert [p["state"] for p in fake.posts] == ["refused"]
     assert "printing" in fake.posts[0]["reason"]
@@ -83,6 +83,16 @@ def test_printing_refuses_and_posts_refusal(fake, tmp_path):
 
 def test_failing_step_posts_failure_with_log_tail(fake, tmp_path):
     d = job(tmp_path, "import sys; sys.stderr.write('Traceback: boom\\n'); sys.exit(1)")
-    assert runner.main([str(d / "spec.json")]) == 1
+    assert runner.main([str(d / "spec.json")]) == runner.EXIT_OK  # reported
     assert fake.posts[0]["state"] == "failed"
     assert "boom" in fake.posts[0]["log_tail"]
+
+
+def test_unreachable_notifier_fails_the_job(fake, tmp_path, monkeypatch):
+    # The one case k8s must see as Failed: the result reached nobody.
+    monkeypatch.setenv("GPU_BATCH_NOTIFY_URL", "http://127.0.0.1:9/webhook/gpu-batch-complete")
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)  # skip retry backoff
+    d = job(tmp_path, "import sys; open(sys.argv[1],'w').write('ok')")
+    assert runner.main([str(d / "spec.json")]) == runner.EXIT_UNREPORTED_SUCCESS
+    st = json.loads((d / "status.json").read_text())
+    assert st["state"] == "succeeded" and st["notified"] is False

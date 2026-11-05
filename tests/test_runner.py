@@ -1,5 +1,11 @@
 """Step runner (homelab#1935 AC2/AC4).
 
+Exit code = DELIVERY, not outcome. A result that reached the notifier exits
+0 whatever its state (status.json and the comment carry the outcome), so a
+k8s Failed Job means exactly one thing: the result did NOT reach the
+channel. That is what KubeJobFailed should page on; a refused render that
+was already reported is not (homelab#1941).
+
 The contract: a job directory on the shared volume holds spec.json. The
 runner checks the guard, runs each step, then proves the expected outputs
 exist before calling the job a success. Whatever happens it writes
@@ -134,7 +140,7 @@ def test_multiple_steps_run_in_order(tmp_path):
 def test_exit_zero_without_outputs_is_failure(tmp_path):
     job = make_job(tmp_path, [py_step("print('pretended to render')")])
     rc, st, n = run(job)
-    assert rc == 1
+    assert rc == runner.EXIT_OK
     assert st["state"] == "failed"
     assert "expected outputs" in st["reason"]
     assert "pretended to render" in st["log_tail"]
@@ -144,7 +150,7 @@ def test_exit_zero_without_outputs_is_failure(tmp_path):
 def test_fewer_outputs_than_min_is_failure(tmp_path):
     job = make_job(tmp_path, [py_step(WRITE_PNGS, "{job}/out")], min_outputs=3)
     rc, st, _ = run(job)
-    assert rc == 1 and "2 of 3" in st["reason"]
+    assert rc == runner.EXIT_OK and "2 of 3" in st["reason"]
 
 
 def test_empty_or_corrupt_png_is_not_an_output(tmp_path):
@@ -152,7 +158,7 @@ def test_empty_or_corrupt_png_is_not_an_output(tmp_path):
             "(o/'a.png').write_bytes(b''); (o/'b.png').write_bytes(b'not a png at all')")
     job = make_job(tmp_path, [py_step(code, "{job}/out")], min_outputs=1)
     rc, st, _ = run(job)
-    assert rc == 1
+    assert rc == runner.EXIT_OK
     assert "a.png" in st["reason"] and "b.png" in st["reason"]
 
 
@@ -160,7 +166,7 @@ def test_failing_step_reports_exit_code_and_log_tail(tmp_path):
     code = "import sys\nfor i in range(500): print('line', i)\nsys.stderr.write('Error: CUDA out of memory\\n'); sys.exit(3)"
     job = make_job(tmp_path, [py_step(code), py_step(WRITE_PNGS, "{job}/out", name="never")])
     rc, st, n = run(job)
-    assert rc == 1
+    assert rc == runner.EXIT_OK
     assert st["state"] == "failed"
     assert "render" in st["reason"] and "exit 3" in st["reason"]
     assert "CUDA out of memory" in st["log_tail"]
@@ -176,7 +182,7 @@ def test_sigkill_is_reported_as_probable_oom(tmp_path):
     code = "import os,signal; os.kill(os.getpid(), signal.SIGKILL)"
     job = make_job(tmp_path, [py_step(code)])
     rc, st, _ = run(job)
-    assert rc == 1
+    assert rc == runner.EXIT_OK
     assert "SIGKILL" in st["reason"] and "OOM" in st["reason"]
 
 
@@ -186,7 +192,7 @@ def test_step_timeout_kills_the_whole_process_group(tmp_path):
             "open(sys.argv[1],'w').write(str(p.pid)); time.sleep(60)")
     job = make_job(tmp_path, [py_step(code, "{job}/child.pid", timeout_s=1)])
     rc, st, _ = run(job)
-    assert rc == 1
+    assert rc == runner.EXIT_OK
     assert "timed out after 1s" in st["reason"]
     child = int((job / "child.pid").read_text())
     with pytest.raises(ProcessLookupError):
@@ -201,13 +207,13 @@ def test_deadline_caps_step_timeouts(tmp_path):
     # runner must give up first and report the timeout itself.
     job = make_job(tmp_path, [py_step("import time; time.sleep(60)", timeout_s=3600)])
     rc, st, _ = run(job, deadline_s=1)
-    assert rc == 1 and "timed out after 1s" in st["reason"]
+    assert rc == runner.EXIT_OK and "timed out after 1s" in st["reason"]
 
 
 def test_missing_binary_is_a_failure_not_a_crash(tmp_path):
     job = make_job(tmp_path, [{"name": "render", "argv": ["/nonexistent/blender"], "timeout_s": 5}])
     rc, st, n = run(job)
-    assert rc == 1 and "nonexistent" in st["reason"]
+    assert rc == runner.EXIT_OK and "nonexistent" in st["reason"]
     assert n.sent[-1]["state"] == "failed"
 
 
@@ -216,7 +222,7 @@ def test_bad_spec_still_writes_status_and_notifies(tmp_path):
     job.mkdir()
     (job / "spec.json").write_text('{"id": "job-1", "steps": "nope"}')
     rc, st, n = run(job)
-    assert rc == 1 and st["state"] == "failed" and "spec" in st["reason"]
+    assert rc == runner.EXIT_OK and st["state"] == "failed" and "spec" in st["reason"]
     assert n.sent[-1]["state"] == "failed"
 
 
@@ -225,7 +231,7 @@ def test_bad_spec_still_writes_status_and_notifies(tmp_path):
 def test_refused_job_runs_no_steps(tmp_path):
     job = make_job(tmp_path, [py_step("open('/dev/null')", name="render")])
     rc, st, n = run(job, guard=refuse)
-    assert rc == runner.EXIT_REFUSED
+    assert rc == runner.EXIT_OK
     assert st["state"] == "refused"
     assert "printing" in st["reason"]
     assert st["steps"] == []
@@ -254,7 +260,7 @@ def test_print_starting_mid_run_aborts_the_step(tmp_path):
         calls.append(1)
         return "Neptune started printing" if len(calls) >= 2 else None
     rc, st, _ = run(job, watch=watch, watch_interval_s=0.1)
-    assert rc == 1
+    assert rc == runner.EXIT_OK
     assert st["state"] == "aborted"
     assert "started printing" in st["reason"]
 
@@ -262,9 +268,10 @@ def test_print_starting_mid_run_aborts_the_step(tmp_path):
 # ------------------------------------------------------------------ notify
 
 def test_notify_failure_is_recorded_but_does_not_change_the_result(tmp_path):
+    # The STATE stays succeeded; only the exit code says nobody was told.
     job = make_job(tmp_path, [py_step(WRITE_PNGS, "{job}/out")])
     rc, st, _ = run(job, notifier=Recorder(fail=True))
-    assert rc == 0
+    assert rc == runner.EXIT_UNREPORTED_SUCCESS
     assert st["state"] == "succeeded"
     assert st["notified"] is False and "n8n down" in st["notify_error"]
 
@@ -293,3 +300,34 @@ def test_status_json_is_written_atomically(tmp_path):
     job = make_job(tmp_path, [py_step(WRITE_PNGS, "{job}/out")])
     run(job)
     assert not list(job.glob("status.json.*"))
+
+
+# ------------------------------------------------------------ exit codes
+
+@pytest.mark.parametrize("make,expect", [
+    (lambda tmp: (make_job(tmp, [py_step(WRITE_PNGS, "{job}/out")]), allow), runner.EXIT_UNREPORTED_SUCCESS),
+    (lambda tmp: (make_job(tmp, [py_step("import sys; sys.exit(3)")]), allow), runner.EXIT_FAILED),
+    (lambda tmp: (make_job(tmp, [py_step(WRITE_PNGS, "{job}/out")]), refuse), runner.EXIT_REFUSED),
+])
+def test_an_unreported_result_exits_nonzero_with_its_state(tmp_path, make, expect):
+    job, g = make(tmp_path)
+    rc, st, _ = run(job, guard=g, notifier=Recorder(fail=True))
+    assert st["notified"] is False
+    assert rc == expect != runner.EXIT_OK
+
+
+def test_unreported_exit_codes_are_distinct():
+    codes = {runner.EXIT_OK, runner.EXIT_FAILED, runner.EXIT_UNREPORTED_SUCCESS, runner.EXIT_REFUSED}
+    assert len(codes) == 4
+
+
+def test_no_notify_url_is_not_reported(tmp_path, monkeypatch):
+    # Without a channel nothing was delivered; claiming notified=true would
+    # make the Job look Complete when nobody was told.
+    monkeypatch.delenv("GPU_BATCH_NOTIFY_URL", raising=False)
+    monkeypatch.setenv("MOONRAKER_URL", "http://127.0.0.1:9")
+    job = make_job(tmp_path, [py_step(WRITE_PNGS, "{job}/out")])
+    rc = runner.main([str(job / "spec.json")])
+    st = json.loads((job / "status.json").read_text())
+    assert st["notified"] is False and "GPU_BATCH_NOTIFY_URL" in st["notify_error"]
+    assert rc != runner.EXIT_OK
