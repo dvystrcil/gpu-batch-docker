@@ -1,0 +1,148 @@
+# Promote `:dev` to semver release tags when a GitHub release is published.
+# No rebuild: re-tag the :dev that build.yaml pushed and smoke-tested, to
+# {{version}} and {{major}}.{{minor}} (no `v` prefix on image tags).
+
+name: docker-release
+
+on:
+  release:
+    types: [published]
+
+env:
+  INTERNAL_REGISTRY: harbor-core.harbor.svc.cluster.local
+  PROJECT: ai
+  IMAGE_NAME: gpu-batch-blender
+
+jobs:
+  promote:
+    runs-on: gpu-batch-docker-runner
+
+    steps:
+      # One named secret per step, never the whole store.
+      - name: Fetch the Harbor username
+        uses: Infisical/secrets-action@v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: HB_USERNAME
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the Harbor password
+        uses: Infisical/secrets-action@v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: HB_PASSWORD
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Log in to Harbor
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.INTERNAL_REGISTRY }}
+          username: ${{ env.HB_USERNAME }}
+          password: ${{ env.HB_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          buildkitd-config-inline: |
+            [registry."harbor-core.harbor.svc.cluster.local"]
+              ca=["/etc/ssl/certs/ca-certificates.crt"]
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Promote dev to release tags
+        run: |
+          for TAG in $(jq -cr '[.tags[]] | unique | .[]' <<< "$DOCKER_METADATA_OUTPUT_JSON"); do
+            docker buildx imagetools create -t "$TAG" \
+              ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:dev
+          done
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect \
+            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+  # The deploy repo's only workload is a suspended CronJob (the Job
+  # template). argocd-image-updater cannot see CronJobs (homelab#951), so
+  # the bump is a PR opened here, after promote, when the tag is known to
+  # exist in Harbor.
+  bump-deploy-repo:
+    needs: promote
+    runs-on: gpu-batch-docker-runner
+    steps:
+      - name: Fetch the CICD App client id
+        uses: Infisical/secrets-action@v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: CICD_APP_CLIENT_ID
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the CICD App private key
+        uses: Infisical/secrets-action@v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: CICD_APP_PRIVATE_KEY
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ env.CICD_APP_CLIENT_ID }}
+          private-key: ${{ env.CICD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: gpu-batch
+
+      - uses: actions/checkout@v7
+        with:
+          repository: dvystrcil/gpu-batch
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Open the tag bump PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"   # git tags are v-prefixed, image tags are not
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::unexpected tag $TAG"; exit 1; }
+          F=overlays/kustomization.yaml
+          # Targeted one-line edit, never a YAML round-trip.
+          grep -q '^  newTag: ' "$F" || { echo "::error::no newTag line in $F"; exit 1; }
+          sed -i "s/^  newTag: .*/  newTag: ${VERSION}/" "$F"
+          if git diff --quiet; then echo "already at ${VERSION}"; exit 0; fi
+          [ "$(git diff --numstat | awk '{print $1+$2}')" = 2 ] || { git diff; echo "::error::bump touched more than one line"; exit 1; }
+          BR="bump/gpu-batch-blender-${VERSION}"
+          git config user.name "gpu-batch-docker release"
+          git config user.email "noreply@github.com"
+          git checkout -b "$BR"
+          git commit -qam "build: gpu-batch-blender ${VERSION}"
+          git push -q origin "$BR"
+          gh pr create --repo dvystrcil/gpu-batch --head "$BR" \
+            --title "build: gpu-batch-blender ${VERSION}" \
+            --body "Released by ${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG} and promoted to \`harbor.sirddail.net/ai/gpu-batch-blender:${VERSION}\` before this PR was opened."
