@@ -49,7 +49,14 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-EXIT_OK, EXIT_FAILED, EXIT_REFUSED = 0, 1, 3
+# Exit code = DELIVERY, not outcome. Once the result has reached the notifier
+# (the comment is posted), the runner exits 0 whatever the state: status.json
+# and the comment carry the outcome. A non-zero exit, and so a k8s Failed Job
+# and a KubeJobFailed alert, means exactly one thing: nobody was told. The
+# code then says what nobody was told about. (homelab#1941: a refusal that
+# was already reported on the issue also paged Alertmanager.)
+EXIT_OK, EXIT_FAILED, EXIT_UNREPORTED_SUCCESS, EXIT_REFUSED = 0, 1, 2, 3
+_UNREPORTED_EXIT = {"succeeded": EXIT_UNREPORTED_SUCCESS, "refused": EXIT_REFUSED}
 LOG_TAIL_CHARS = 4000
 # The Job's activeDeadlineSeconds kills the pod with no chance to report, so
 # the runner gives up this long before it and reports the timeout itself.
@@ -228,7 +235,7 @@ def run(spec_path: Path, guard, notifier, watch=lambda: None, deadline_s: float 
     spec_path = Path(spec_path)
     job = Job(spec_path)
     t0 = time.monotonic()
-    state, reason, rc = "failed", "", EXIT_FAILED
+    state, reason = "failed", ""
     try:
         spec = load_spec(spec_path)
         job.status["id"] = spec.get("id", job.status["id"])
@@ -239,7 +246,7 @@ def run(spec_path: Path, guard, notifier, watch=lambda: None, deadline_s: float 
         decision = guard(override=bool(spec.get("printer_off")))
         job.status["guard"] = decision.reason
         if not decision.allow:
-            state, reason, rc = "refused", decision.reason, EXIT_REFUSED
+            state, reason = "refused", decision.reason
         else:
             job.status["state"] = "running"
             job.write()
@@ -258,7 +265,7 @@ def run(spec_path: Path, guard, notifier, watch=lambda: None, deadline_s: float 
                 if problem:
                     state, reason = "failed", f"steps exited 0 but {problem}"
                 else:
-                    state, rc = "succeeded", EXIT_OK
+                    state = "succeeded"
                     reason = f"{len(outputs)} output(s) verified"
     except (ValueError, KeyError, TypeError) as e:
         state, reason = "failed", f"bad spec: {type(e).__name__}: {e}"
@@ -272,8 +279,11 @@ def run(spec_path: Path, guard, notifier, watch=lambda: None, deadline_s: float 
     except Exception as e:
         job.status["notified"], job.status["notify_error"] = False, f"{type(e).__name__}: {e}"
     job.write()
-    print(f"GPU-BATCH-RESULT {job.status['id']} {state}: {reason}", flush=True)
-    return rc
+    print(f"GPU-BATCH-RESULT {job.status['id']} {state}: {reason}"
+          + ("" if job.status["notified"] else f" (NOT REPORTED: {job.status['notify_error']})"), flush=True)
+    if job.status["notified"]:
+        return EXIT_OK
+    return _UNREPORTED_EXIT.get(state, EXIT_FAILED)
 
 
 def http_notifier(url: str, attempts: int = 3):
@@ -294,6 +304,10 @@ def http_notifier(url: str, attempts: int = 3):
     return send
 
 
+def _no_channel(status: dict) -> None:
+    raise RuntimeError("GPU_BATCH_NOTIFY_URL is not set: the result reached no channel")
+
+
 def main(argv=None) -> int:
     from gpu_batch import guard as guard_mod
 
@@ -303,7 +317,7 @@ def main(argv=None) -> int:
 
     check, watch = guard_mod.from_env()
     url = os.environ.get("GPU_BATCH_NOTIFY_URL")
-    notifier = http_notifier(url) if url else (lambda status: None)
+    notifier = http_notifier(url) if url else _no_channel
     deadline = os.environ.get("GPU_BATCH_DEADLINE_S")
     deadline_s = float(deadline) - DEADLINE_MARGIN_S if deadline else None
     return run(args.spec, guard=check, notifier=notifier, watch=watch, deadline_s=deadline_s)
