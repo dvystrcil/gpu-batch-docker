@@ -2,5 +2,21 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "tests.yaml's python-version is the image's python3 (ubuntu:24.04 ships 3.12), so the tests prove the interpreter that ships. It moves only with the Dockerfile's base image, in the same PR. A lone bump is a 'minor' the fleet auto-merge gate would land (homelab#1935).",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["python"],
+      "enabled": false
+    },
+    {
+      "description": "A new Ubuntu base changes python3, the GL libs and the Blender runtime. Never auto-merge it: bump tests.yaml's python-version in the same PR and re-run the node-03 render diff (homelab#1935 AC1).",
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["ubuntu"],
+      "matchUpdateTypes": ["major", "minor"],
+      "automerge": false,
+      "labels": ["needs-render-diff"]
+    }
   ]
 }
