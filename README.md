@@ -19,12 +19,16 @@ A job is a directory on the NFS work share. The runner (`python3 -m gpu_batch.ru
 2. **Steps:** runs `spec.steps` in order, `{job}` expanded, each in its own process group with a timeout capped by the Job deadline minus 120 s. stdout goes to `job.log` and stderr to `job.err`.
 3. **Proof:** success means `expect_outputs` exist, are non-empty, and are valid PNGs where `.png`, with at least `min_outputs` of them. Exit 0 alone is not success.
 4. **Report:** writes `status.json` atomically at every transition, then POSTs it once to `GPU_BATCH_NOTIFY_URL` (the n8n receiver, which comments on GitHub).
+5. **Status line:** the runner's **last** stdout line (the pod log, not `job.log`) is `GPU-BATCH-STATUS ` followed by the final `status.json` on one line. An n8n chain can't see the work share, so it reads each step's result from there with the k8s node's *Get Job Log Tail* ([homelab#1961](https://github.com/dvystrcil/homelab/issues/1961)). A Complete Job is not a successful step: read `state`.
+
+The exit code says whether the result was **delivered**, not what it was ([homelab#1941](https://github.com/dvystrcil/homelab/issues/1941)). The outcome is in `status.json`.
 
 | Exit | Meaning |
 |---|---|
-| 0 | succeeded, outputs verified |
-| 1 | failed or aborted (step error, timeout, SIGKILL/OOM, missing outputs, bad spec) |
-| 3 | refused by the print guard; no step ran |
+| 0 | the result reached the notifier, whatever its state |
+| 1 | failed or aborted, and nobody was told |
+| 2 | succeeded, and nobody was told |
+| 3 | refused by the print guard, and nobody was told |
 
 Adding a workload: add a `FROM runner AS <name>` stage and a build step, plus a template in `gpu-batch`.
 

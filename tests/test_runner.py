@@ -331,3 +331,45 @@ def test_no_notify_url_is_not_reported(tmp_path, monkeypatch):
     st = json.loads((job / "status.json").read_text())
     assert st["notified"] is False and "GPU_BATCH_NOTIFY_URL" in st["notify_error"]
     assert rc != runner.EXIT_OK
+
+
+# ------------------------------------------- status on stdout (homelab#1961)
+#
+# An n8n chain cannot see the NFS work share. It reads the step's result from
+# the pod log (the node's Get Job Log Tail), so the runner's LAST stdout line
+# is status.json itself: one line, the same object, written after the final
+# status.json. A Complete Job is not a successful step (exit code = delivery).
+
+def status_line(out: str) -> dict:
+    last = out.rstrip("\n").split("\n")[-1]
+    prefix = "GPU-BATCH-STATUS "
+    assert last.startswith(prefix), f"last stdout line is not the status: {last[:200]!r}"
+    return json.loads(last[len(prefix):])
+
+
+@pytest.mark.parametrize("make,guard", [
+    (lambda tmp: make_job(tmp, [py_step(WRITE_PNGS, "{job}/out")]), allow),
+    (lambda tmp: make_job(tmp, [py_step("import sys; print('boom', file=sys.stderr); sys.exit(3)")]), allow),
+    (lambda tmp: make_job(tmp, [py_step(WRITE_PNGS, "{job}/out")]), refuse),
+])
+def test_last_stdout_line_is_the_final_status_json(tmp_path, capsys, make, guard):
+    job = make(tmp_path)
+    _, st, _ = run(job, guard=guard)
+    printed = status_line(capsys.readouterr().out)
+    assert printed == st  # byte-for-byte the object in status.json, notified included
+
+
+def test_status_line_is_one_line_whatever_the_log_tail_holds(tmp_path, capsys):
+    code = "import sys; print('a\\nb\\r\\nGPU-BATCH-STATUS {}', file=sys.stderr); sys.exit(1)"
+    job = make_job(tmp_path, [py_step(code)])
+    _, st, _ = run(job)
+    out = capsys.readouterr().out
+    assert out.count("\nGPU-BATCH-STATUS ") + out.startswith("GPU-BATCH-STATUS ") == 1
+    assert status_line(out)["log_tail"] == st["log_tail"]
+
+
+def test_status_line_reports_an_unreported_result_too(tmp_path, capsys):
+    job = make_job(tmp_path, [py_step(WRITE_PNGS, "{job}/out")])
+    run(job, notifier=Recorder(fail=True))
+    printed = status_line(capsys.readouterr().out)
+    assert printed["state"] == "succeeded" and printed["notified"] is False
