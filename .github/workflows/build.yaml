@@ -40,6 +40,9 @@ jobs:
           - target: freecad
             image: gpu-batch-freecad
             smoke: bin/smoke-test-freecad.sh
+          - target: prusaslicer
+            image: gpu-batch-prusaslicer
+            smoke: bin/smoke-test-prusaslicer.sh
     permissions:
       contents: read
     steps:
@@ -70,6 +73,9 @@ jobs:
           - target: freecad
             image: gpu-batch-freecad
             smoke: bin/smoke-test-freecad.sh
+          - target: prusaslicer
+            image: gpu-batch-prusaslicer
+            smoke: bin/smoke-test-prusaslicer.sh
     permissions:
       contents: read
     steps:
@@ -127,7 +133,7 @@ jobs:
         with:
           context: .
           target: ${{ matrix.target }}
-          # amd64 only: both official upstream builds (Blender tarball, FreeCAD AppImage) are x86-64.
+          # amd64 only: every upstream build (Blender tarball, FreeCAD AppImage, PrusaSlicer's Flathub x86_64 ref) is x86-64.
           platforms: linux/amd64
           push: true
           tags: |
@@ -146,6 +152,9 @@ jobs:
                      grep -q '^Blender 5\.2\.' v.out ;;
             freecad) docker run --rm --entrypoint freecadcmd "$IMG" --version | tee v.out
                      grep -q '^FreeCAD 26\.3\.' v.out ;;
+            prusaslicer) docker run --rm --entrypoint prusa-slicer "$IMG" --help > v.out
+                     head -n 1 v.out
+                     grep -q '^PrusaSlicer-2\.9\.7+' v.out ;;
           esac
           docker run --rm "$IMG" --help | grep -q 'gpu-batch-run'
 

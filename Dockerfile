@@ -6,6 +6,8 @@
 #   blender  runner + Blender, published as harbor.sirddail.net/ai/gpu-batch-blender.
 #   freecad  runner + FreeCAD (freecadcmd, Fasteners, xvfb-run), published as
 #            harbor.sirddail.net/ai/gpu-batch-freecad. CPU-only.
+#   prusaslicer  runner + PrusaSlicer (Flathub build, run without flatpak),
+#            published as harbor.sirddail.net/ai/gpu-batch-prusaslicer. CPU-only.
 #
 # A new workload (ffmpeg, PyTorch, ...) is another `FROM runner AS <x>` stage
 # plus a build step, not a new repo.
@@ -117,5 +119,65 @@ ENV FREECAD_APPIMAGE=/opt/freecad/AppRun \
     FREECADCMD=/usr/local/bin/freecadcmd \
     FREECAD_VERSION=${FREECAD_VERSION} \
     FASTENERS_REF=${FASTENERS_REF}
+
+USER 1000:1000
+
+
+# PrusaSlicer for the vt350 slice checks (vt350#70's slice-check.py). Linux
+# builds ship only through Flathub (the GitHub releases carry no Linux
+# AppImage since 2.9), so this throwaway stage installs Flathub's build with
+# flatpak and the final stage copies just its files. Nothing runs through
+# flatpak/bwrap at runtime: bwrap needs user namespaces, which a pod's
+# seccomp profile refuses.
+#
+# Both pins are ostree commits, i.e. content hashes of the whole tree, so
+# they are the integrity check. They are the commits the laptop runs
+# (`flatpak info com.prusa3d.PrusaSlicer` / `org.gnome.Platform//50`), so a
+# cluster slice is byte-comparable with a laptop slice. Bump all four
+# together; Renovate can't see Flathub.
+FROM ubuntu:26.04 AS prusaslicer-fetch
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG PRUSASLICER_VERSION=2.9.7
+ARG PRUSASLICER_COMMIT=22caa5995fef8170cbed1d404f993996e5552e47159391666a7b096a85d8f641
+ARG GNOME_RUNTIME=50
+ARG GNOME_RUNTIME_COMMIT=4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends flatpak ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    app=app/com.prusa3d.PrusaSlicer/x86_64/stable; \
+    rt=runtime/org.gnome.Platform/x86_64/${GNOME_RUNTIME}; \
+    flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo; \
+    flatpak install --system -y --noninteractive --no-related flathub "$app"; \
+    flatpak update --system -y --noninteractive --no-related --no-deps --commit="${PRUSASLICER_COMMIT}" "$app"; \
+    flatpak update --system -y --noninteractive --no-related --no-deps --commit="${GNOME_RUNTIME_COMMIT}" "$rt"; \
+    test "$(flatpak info --system --show-commit "$app")" = "${PRUSASLICER_COMMIT}"; \
+    test "$(flatpak info --system --show-commit "$rt")" = "${GNOME_RUNTIME_COMMIT}"; \
+    flatpak info --system "$app" | grep -qE "^ *Version: ${PRUSASLICER_VERSION}$"; \
+    flatpak info --system "$app" | grep -qE "^ *Runtime: org.gnome.Platform/x86_64/${GNOME_RUNTIME}$"; \
+    mkdir -p /out/runtime; \
+    cp -a "$(flatpak info --system --show-location "$app")/files" /out/app; \
+    cp -a "$(flatpak info --system --show-location "$rt")/files/lib" /out/runtime/lib
+
+
+FROM runner AS prusaslicer
+
+# CPU-only: runs on max-01 with GPU_BATCH_PRINT_GUARD=off (no GPU visible).
+# The binary runs on the runtime's own loader and libs, never Ubuntu's.
+# rsvg-convert: slice-check.py turns its G-code plot (SVG) into the PNG preview.
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends librsvg2-bin \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=prusaslicer-fetch /out/app /opt/prusaslicer/app
+COPY --from=prusaslicer-fetch /out/runtime /opt/prusaslicer/runtime
+RUN set -eux; \
+    rtlib=/opt/prusaslicer/runtime/lib/x86_64-linux-gnu; \
+    printf '#!/bin/sh\nexec %s/ld-linux-x86-64.so.2 --library-path /opt/prusaslicer/app/lib:%s /opt/prusaslicer/app/bin/prusa-slicer "$@"\n' "$rtlib" "$rtlib" \
+      > /usr/local/bin/prusa-slicer; \
+    chmod 755 /usr/local/bin/prusa-slicer
+
+ARG PRUSASLICER_VERSION=2.9.7
+ENV PRUSASLICER_VERSION=${PRUSASLICER_VERSION}
 
 USER 1000:1000

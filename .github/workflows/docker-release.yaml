@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [gpu-batch-blender, gpu-batch-freecad]
+        image: [gpu-batch-blender, gpu-batch-freecad, gpu-batch-prusaslicer]
 
     steps:
       # One named secret per step, never the whole store.
@@ -140,7 +140,7 @@ jobs:
           # Targeted edit of the newTag line under each image's name line,
           # never a YAML round-trip.
           bumped=()
-          for IMG in gpu-batch-blender gpu-batch-freecad; do
+          for IMG in gpu-batch-blender gpu-batch-freecad gpu-batch-prusaslicer; do
             NAME="- name: harbor.sirddail.net/ai/${IMG}"
             if ! grep -qxF -e "$NAME" "$F"; then echo "::notice::${IMG} not in $F yet, skipped"; continue; fi
             N=$(grep -nxF -e "$NAME" "$F" | cut -d: -f1)
