@@ -1,0 +1,122 @@
+# Shared test harness for the tool images (gpu-batch-docker#10).
+# Run it with bin/compose-test.sh, which sets CASE and the per-case env.
+#
+#   seed -> freecad -> prusaslicer -+-> assert
+#                   \-> blender ----+
+#   moonraker-mock (guard), notify-sink (completion webhook), print-starter
+#
+# No bind mounts: on the ARC runners Docker is a DinD sidecar, so a host path
+# names the daemon's filesystem. Everything shares the named volume `work`,
+# filled by `seed` from the harness image. No host ports.
+
+x-tool: &tool
+  depends_on: &tool-deps
+    seed: {condition: service_completed_successfully}
+    moonraker-mock: {condition: service_healthy}
+    notify-sink: {condition: service_healthy}
+  volumes: [work:/work]
+  environment: &tool-env
+    MOONRAKER_URL: http://moonraker-mock:7125
+    GPU_BATCH_NOTIFY_URL: http://notify-sink:8080/webhook/gpu-batch-complete
+
+# The harness image runs python as PID 1, which ignores SIGTERM: without an
+# init, compose's stop waits out the grace period on every mock.
+x-harness: &harness
+  image: gpu-batch-harness:${HARNESS_TAG:-local}
+  init: true
+  stop_grace_period: 2s
+
+x-health: &health
+  interval: 1s
+  timeout: 3s
+  retries: 30
+
+services:
+  seed:
+    <<: *harness
+    build:
+      context: .
+      args:
+        RUNNER_IMAGE: ${RUNNER_IMAGE:-gpu-batch-runner:local}
+    command: [python3, /harness/seed.py, "${CASE:?CASE is required}"]
+    volumes: [work:/work]
+
+  moonraker-mock:
+    <<: *harness
+    command: [python3, /harness/mocks/moonraker_mock.py]
+    environment:
+      MOCK_STATE: ${MOCK_STATE:-standby}
+    healthcheck:
+      <<: *health
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7125/_mock/health', timeout=2)"]
+
+  notify-sink:
+    <<: *harness
+    command: [python3, /harness/mocks/notify_sink.py]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+    volumes: [work:/work]
+    environment:
+      SINK_DIR: /work/_notify
+      SINK_FAIL: ${SINK_FAIL:-}
+    healthcheck:
+      <<: *health
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/_mock/health', timeout=2)"]
+
+  freecad:
+    <<: *tool
+    image: ${FREECAD_IMAGE:-gpu-batch-freecad:local}
+    command: [/work/freecad/spec.json]
+    environment:
+      <<: *tool-env
+      GPU_BATCH_PRINT_GUARD: "off"
+
+  prusaslicer:
+    <<: *tool
+    image: ${PRUSASLICER_IMAGE:-gpu-batch-prusaslicer:local}
+    command: [/work/prusaslicer/spec.json]
+    depends_on:
+      <<: *tool-deps
+      freecad: {condition: service_completed_successfully}
+    environment:
+      <<: *tool-env
+      GPU_BATCH_PRINT_GUARD: "off"
+      # Nothing may be written outside --datadir (a pod's HOME need not be writable).
+      HOME: /nonexistent
+
+  blender:
+    <<: *tool
+    image: ${BLENDER_IMAGE:-gpu-batch-blender:local}
+    command: [/work/blender/spec.json]
+    depends_on:
+      <<: *tool-deps
+      freecad: {condition: service_completed_successfully}
+    environment:
+      <<: *tool-env
+      GPU_BATCH_PRINT_GUARD: ${BLENDER_PRINT_GUARD:-}
+      NVIDIA_VISIBLE_DEVICES: ${BLENDER_NVIDIA_VISIBLE_DEVICES:-}
+
+  # print-starts only (exits at once otherwise): switches the mock to
+  # "printing" once blender's step is running.
+  print-starter:
+    <<: *harness
+    command: [python3, /harness/check.py, --print-starter, "${CASE}"]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+      moonraker-mock: {condition: service_healthy}
+    volumes: [work:/work]
+
+  assert:
+    <<: *harness
+    command: [python3, /harness/check.py, "${CASE}"]
+    environment:
+      EXPECT_FREECAD: ${EXPECT_FREECAD:-26.3.0}
+      EXPECT_PRUSASLICER: ${EXPECT_PRUSASLICER:-2.9.7}
+    depends_on:
+      prusaslicer: {condition: service_completed_successfully}
+      blender: {condition: service_completed_successfully}
+      print-starter: {condition: service_completed_successfully}
+    volumes: [work:/work]
+
+volumes:
+  work:
