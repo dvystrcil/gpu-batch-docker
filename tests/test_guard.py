@@ -190,3 +190,79 @@ def test_obico_psql_failure_is_unknown():
     r = guard.query_obico({"host": "h", "port": "5432", "user": "u", "password": "p"},
                           printer_name="Neptune", run=lambda a, env, timeout, stdin: (2, "", "FATAL: x"))
     assert r.kind == "unknown" and "FATAL" in r.detail
+
+
+# ------------------------------------------- CPU-only jobs (homelab#1974)
+#
+# GPU_BATCH_PRINT_GUARD=off skips the guard, but ONLY when this container
+# cannot reach a GPU. The guard protects the shared GTX 970's VRAM; a job
+# with no GPU device cannot touch it. Anyone who can set env on a Job (the
+# n8n node's env override, say) could set the switch on a render, so a
+# visible GPU always keeps the guard on.
+
+def _no_probe(*a, **k):
+    raise AssertionError("the printer was probed")
+
+
+def _guard_off_env(**extra):
+    return {"GPU_BATCH_PRINT_GUARD": "off", **extra}
+
+
+def test_guard_off_without_a_gpu_allows_without_probing(tmp_path, monkeypatch):
+    monkeypatch.setattr(guard, "probe_moonraker", _no_probe)
+    check, watch = guard.from_env(_guard_off_env(), dev_dir=str(tmp_path))
+    d = check(override=False)
+    assert d.allow is True
+    assert "CPU-only" in d.reason and "no GPU" in d.reason
+    assert watch() is None
+
+
+def test_guard_off_is_ignored_when_a_gpu_is_assigned_by_env(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(guard, "probe_moonraker", lambda url: calls.append(url) or PrinterProbe("state", "printing", ""))
+    check, watch = guard.from_env(_guard_off_env(NVIDIA_VISIBLE_DEVICES="GPU-1234"), dev_dir=str(tmp_path))
+    d = check(override=False)
+    assert d.allow is False and calls
+    assert "ignored" in d.reason and "GPU" in d.reason
+    assert watch() is not None
+
+
+def test_guard_off_is_ignored_when_a_gpu_device_exists(tmp_path, monkeypatch):
+    (tmp_path / "nvidia0").touch()
+    monkeypatch.setattr(guard, "probe_moonraker", lambda url: PrinterProbe("state", "printing", ""))
+    check, _ = guard.from_env(_guard_off_env(), dev_dir=str(tmp_path))
+    assert check(override=False).allow is False
+
+
+def test_nvidiactl_alone_is_not_a_gpu(tmp_path, monkeypatch):
+    # Control nodes without a numbered device give no GPU access.
+    (tmp_path / "nvidiactl").touch()
+    (tmp_path / "loop1000000").touch()  # other devices with digits are not GPUs
+    monkeypatch.setattr(guard, "probe_moonraker", _no_probe)
+    check, _ = guard.from_env(_guard_off_env(), dev_dir=str(tmp_path))
+    assert check(override=False).allow is True
+
+
+@pytest.mark.parametrize("value", ["void", "none", "", "VOID", " none "])
+def test_nvidia_visible_devices_meaning_no_gpu_counts_as_cpu_only(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(guard, "probe_moonraker", _no_probe)
+    check, _ = guard.from_env(_guard_off_env(NVIDIA_VISIBLE_DEVICES=value), dev_dir=str(tmp_path))
+    assert check(override=False).allow is True
+
+
+@pytest.mark.parametrize("value", [None, "on", "OFF", "0", "false", "no", " off"])
+def test_anything_but_exactly_off_keeps_the_guard(tmp_path, monkeypatch, value):
+    calls = []
+    monkeypatch.setattr(guard, "probe_moonraker", lambda url: calls.append(url) or PrinterProbe("state", "printing", ""))
+    env = {} if value is None else {"GPU_BATCH_PRINT_GUARD": value}
+    check, _ = guard.from_env(env, dev_dir=str(tmp_path))
+    d = check(override=False)
+    assert d.allow is False and calls
+    assert "ignored" not in d.reason
+
+
+def test_unreadable_dev_dir_counts_as_a_gpu(tmp_path, monkeypatch):
+    # Cannot tell whether a GPU is there: fail closed, keep the guard.
+    monkeypatch.setattr(guard, "probe_moonraker", lambda url: PrinterProbe("state", "printing", ""))
+    check, _ = guard.from_env(_guard_off_env(), dev_dir=str(tmp_path / "missing"))
+    assert check(override=False).allow is False

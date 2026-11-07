@@ -14,6 +14,7 @@ Deployed by [`dvystrcil/gpu-batch`](https://github.com/dvystrcil/gpu-batch) (Job
 A job is a directory on the NFS work share. The runner (`python3 -m gpu_batch.runner <job>/spec.json`, the image entrypoint):
 
 1. **Guard:** refuses to start while Neptune is printing (`src/gpu_batch/guard.py`). Moonraker first; Obico's `current_print_id` breaks the tie when the printer is unreachable. Every unknown fails closed. It re-checks every 60 s during a step and stops the step if a print starts.
+   - **CPU-only templates** (FreeCAD, PrusaSlicer on max-01) set `GPU_BATCH_PRINT_GUARD=off` (exactly `off`). That skips the guard **only if the container cannot reach a GPU**: no `/dev/nvidia<N>` and no `NVIDIA_VISIBLE_DEVICES` naming one. If a GPU is visible, the switch is ignored and the reason says so, so setting it on a render does nothing. The guard protects the GTX 970's VRAM, and a job without a GPU can't touch it.
 2. **Steps:** runs `spec.steps` in order, `{job}` expanded, each in its own process group with a timeout capped by the Job deadline minus 120 s. stdout goes to `job.log` and stderr to `job.err`.
 3. **Proof:** success means `expect_outputs` exist, are non-empty, and are valid PNGs where `.png`, with at least `min_outputs` of them. Exit 0 alone is not success.
 4. **Report:** writes `status.json` atomically at every transition, then POSTs it once to `GPU_BATCH_NOTIFY_URL` (the n8n receiver, which comments on GitHub).

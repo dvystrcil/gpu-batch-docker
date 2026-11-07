@@ -18,6 +18,13 @@ Sources, in order:
 Every unknown fails CLOSED. A safety gate that fails open is not a gate.
 The one escape hatch is the --printer-off override, and it applies only
 while the printer is unreachable: a printer that answers disproves the claim.
+
+CPU-only jobs (homelab#1974): a template may set GPU_BATCH_PRINT_GUARD=off
+(exactly that value). It skips the guard only when this container cannot
+reach a GPU, i.e. no /dev/nvidia<N> device and no NVIDIA_VISIBLE_DEVICES
+naming one. A job with no GPU cannot touch the 970's VRAM. A visible GPU
+keeps the guard on, so the switch set on a render (by anyone who can set a
+Job's env) changes nothing.
 """
 from __future__ import annotations
 
@@ -192,8 +199,28 @@ def read_k8s_secret(namespace: str, name: str, sa_dir: str = SA_DIR) -> dict:
 
 # ------------------------------------------------------------------ wiring
 
-def from_env(env=os.environ):
+_NO_GPU_VALUES = frozenset({"", "void", "none"})
+
+
+def gpu_visible(env, dev_dir: str = "/dev") -> bool:
+    """True if this container can reach an NVIDIA GPU."""
+    visible = env.get("NVIDIA_VISIBLE_DEVICES")
+    if visible is not None and visible.strip().lower() not in _NO_GPU_VALUES:
+        return True
+    try:
+        names = os.listdir(dev_dir)
+    except OSError:
+        return True  # cannot tell: fail closed
+    return any(n.startswith("nvidia") and n[len("nvidia"):].isdigit() for n in names)
+
+
+def from_env(env=os.environ, dev_dir: str = "/dev"):
     """Build the guard the runner calls, configured from the pod env."""
+    guard_off = env.get("GPU_BATCH_PRINT_GUARD") == "off"
+    if guard_off and not gpu_visible(env, dev_dir):
+        def skipped(override: bool) -> Decision:
+            return Decision(True, "print guard off: CPU-only job, no GPU in this container")
+        return skipped, lambda: None
     moonraker = env.get("MOONRAKER_URL", "http://192.168.86.243")
     printer = env.get("OBICO_PRINTER_NAME", "Neptune")
     secret = env.get("OBICO_PG_SECRET", "obico/obico-postgres-pguser-gpubatch")
@@ -203,7 +230,10 @@ def from_env(env=os.environ):
         return query_obico(read_k8s_secret(ns, name), printer)
 
     def check(override: bool) -> Decision:
-        return decide(probe_moonraker(moonraker), obico, override)
+        d = decide(probe_moonraker(moonraker), obico, override)
+        if guard_off:
+            return Decision(d.allow, f"GPU_BATCH_PRINT_GUARD=off ignored: a GPU is visible; {d.reason}")
+        return d
 
     def watch() -> str | None:
         # Mid-run re-check: moonraker only, and only a definite busy state
