@@ -6,6 +6,7 @@ Build repo for the **GPU batch lane** on the GTX 970 (`k8s-node-03`): fire-and-f
 |---|---|
 | `harbor.sirddail.net/ai/gpu-batch-blender` | Ubuntu 26.04, Blender 5.2.2 LTS (official tarball, sha256-pinned), the `gpu_batch` runner, psql |
 | `harbor.sirddail.net/ai/gpu-batch-freecad` | Ubuntu 26.04, FreeCAD 26.3rc2 (official AppImage, sha256-pinned, extracted), Fasteners workbench 0.5.64 (commit-pinned), `xvfb-run`, the `gpu_batch` runner, psql. CPU-only (max-01) |
+| `harbor.sirddail.net/ai/gpu-batch-prusaslicer` | Ubuntu 26.04, PrusaSlicer 2.9.7 (Flathub build, app + GNOME 50 runtime pinned by ostree commit, run without flatpak), `rsvg-convert`, the `gpu_batch` runner, psql. CPU-only (max-01) |
 
 Deployed by [`dvystrcil/gpu-batch`](https://github.com/dvystrcil/gpu-batch) (Job templates), submitted with `homelab/bin/gpu-batch-submit.py`.
 
@@ -35,10 +36,14 @@ docker build --target blender -t gpu-batch-blender:local .
 bin/smoke-test.sh gpu-batch-blender:local              # CPU render through the real entrypoint, plus a refusal
 docker build --target freecad -t gpu-batch-freecad:local .
 bin/smoke-test-freecad.sh gpu-batch-freecad:local      # headless Fasteners screw + GUI mode under xvfb-run, plus a refusal
+docker build --target prusaslicer -t gpu-batch-prusaslicer:local .
+bin/smoke-test-prusaslicer.sh gpu-batch-prusaslicer:local  # slice a cube, check the G-code; refusal; guard-off CPU run while printing
 ```
 
 Bumping Blender: change `BLENDER_VERSION` and `BLENDER_SHA256` together, both taken from `https://download.blender.org/release/Blender<major.minor>/blender-<ver>.sha256`.
 
 Bumping FreeCAD: change `FREECAD_VERSION` and `FREECAD_SHA256` together. The checksum is the `digest` GitHub publishes for the `FreeCAD_<ver>-Linux-x86_64.AppImage` asset (`gh api repos/FreeCAD/FreeCAD/releases/tags/<ver> --jq '.assets[]|.name+" "+.digest'`); FreeCAD ships no separate checksum file. Fasteners: change `FASTENERS_REF` and `FASTENERS_COMMIT` together (the build fails if the fetched commit is not the pinned one). In GUI mode FreeCAD *imports* a `.py` argument as a module, so a script whose name shadows a loaded module (e.g. `gui.py`) never runs.
+
+Bumping PrusaSlicer: Linux builds ship only through Flathub, so the `prusaslicer-fetch` stage installs `com.prusa3d.PrusaSlicer` with flatpak, pins it and its runtime to exact ostree commits (content hashes of the whole tree, so they are the integrity check), and the final stage copies just the files. Change `PRUSASLICER_VERSION`, `PRUSASLICER_COMMIT`, `GNOME_RUNTIME` and `GNOME_RUNTIME_COMMIT` together, from `flatpak info com.prusa3d.PrusaSlicer` and `flatpak info org.gnome.Platform//<branch>` on a machine running the version you want; the build fails if a commit or the version doesn't match. `prusa-slicer` runs on the runtime's own `ld-linux` and libraries, not through `flatpak run`: bwrap needs user namespaces, which a pod's seccomp profile refuses. Pass `--datadir` under the job dir; a pod's HOME isn't writable.
 
 Licensed [MIT](LICENSE).
