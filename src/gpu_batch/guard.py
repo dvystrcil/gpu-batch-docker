@@ -183,9 +183,10 @@ SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 def read_k8s_secret(namespace: str, name: str, sa_dir: str = SA_DIR) -> dict:
     """Read a Secret through the API with the pod's own SA token.
 
-    The obico repo grants this SA `get` on exactly one Secret, PGO's
-    obico-postgres-pguser-gpubatch. Reading it live, not copying it, means a
-    PGO password rotation needs nothing from this side.
+    The obico repo grants this SA `get` on exactly one Secret,
+    obico-postgres-gpubatch (CNPG since argocd-projects#310; it was PGO's
+    obico-postgres-pguser-gpubatch). Reading it live, not copying it, means a
+    password rotation needs nothing from this side.
     """
     token = open(os.path.join(sa_dir, "token")).read().strip()
     ctx = ssl.create_default_context(cafile=os.path.join(sa_dir, "ca.crt"))
@@ -223,7 +224,7 @@ def from_env(env=os.environ, dev_dir: str = "/dev"):
         return skipped, lambda: None
     moonraker = env.get("MOONRAKER_URL", "http://192.168.86.243")
     printer = env.get("OBICO_PRINTER_NAME", "Neptune")
-    secret = env.get("OBICO_PG_SECRET", "obico/obico-postgres-pguser-gpubatch")
+    secret = env.get("OBICO_PG_SECRET", "obico/obico-postgres-gpubatch")
 
     def obico() -> ObicoState:
         ns, name = secret.split("/", 1)

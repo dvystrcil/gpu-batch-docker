@@ -266,3 +266,22 @@ def test_unreadable_dev_dir_counts_as_a_gpu(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "probe_moonraker", lambda url: PrinterProbe("state", "printing", ""))
     check, _ = guard.from_env(_guard_off_env(), dev_dir=str(tmp_path / "missing"))
     assert check(override=False).allow is False
+
+
+# argocd-projects#310: obico's Postgres moved from PGO to CNPG. PGO's
+# obico-postgres-pguser-gpubatch is deleted with the PGO cluster (obico PR C),
+# and the obico repo's Role grants `get` on the CNPG Secret only. A job that
+# does not set OBICO_PG_SECRET must still reach a Secret that exists.
+
+@pytest.mark.parametrize("env, expected", [
+    ({}, ("obico", "obico-postgres-gpubatch")),
+    ({"OBICO_PG_SECRET": "other/some-secret"}, ("other", "some-secret")),
+])
+def test_obico_secret_default_is_the_cnpg_one(monkeypatch, tmp_path, env, expected):
+    read = []
+    monkeypatch.setattr(guard, "probe_moonraker", lambda url: PrinterProbe("unreachable", None, ""))
+    monkeypatch.setattr(guard, "read_k8s_secret", lambda ns, name: read.append((ns, name)) or {})
+    monkeypatch.setattr(guard, "query_obico", lambda creds, printer: ObicoState("idle", "test"))
+    check, _ = guard.from_env(env, dev_dir=str(tmp_path))
+    check(override=False)
+    assert read == [expected]
