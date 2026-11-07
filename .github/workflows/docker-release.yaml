@@ -128,6 +128,13 @@ jobs:
           repository: dvystrcil/gpu-batch
           token: ${{ steps.app-token.outputs.token }}
 
+      # AFTER the deploy-repo checkout, which cleans the workspace root.
+      - name: Checkout this repo's bump helpers
+        uses: actions/checkout@v7
+        with:
+          path: .gpu-batch-docker
+          sparse-checkout: .github/scripts
+
       - name: Open the tag bump PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -151,12 +158,22 @@ jobs:
           [ "${#bumped[@]}" -gt 0 ] || { echo "::error::no image of ours in $F"; exit 1; }
           if git diff --quiet; then echo "already at ${VERSION}"; exit 0; fi
           [ "$(git diff --numstat | awk '{print $1+$2}')" -le $((2 * ${#bumped[@]})) ] || { git diff; echo "::error::bump touched more than one line per image"; exit 1; }
+          # homelab's merge-receipt sweep reads the namespace and the templates
+          # from this marker: the diff alone says `overlays`, and a suspended
+          # CronJob never runs a Job to verify (homelab#1992).
+          WORKLOADS=$(bash "$GITHUB_WORKSPACE/.gpu-batch-docker/.github/scripts/receipt-workloads.sh" . "${bumped[@]}")
           BR="bump/gpu-batch-${VERSION}"
-          git config user.name "gpu-batch-docker release"
-          git config user.email "noreply@github.com"
+          # homelab's auto-merge gate (bin/pr-auto-merge.py, image-bump) needs
+          # every commit authored by homelab-bump-bot, as bump-image-tag.py
+          # writes them. noreply@github.com is attributed to `web-flow`, and
+          # the gate held every bump for a human (gpu-batch#14).
+          git config user.name "homelab-bump-bot"
+          git config user.email "noreply@sirddail.net"
           git checkout -b "$BR"
           git commit -qam "build: ${bumped[*]} ${VERSION}"
           git push -q origin "$BR"
           gh pr create --repo dvystrcil/gpu-batch --head "$BR" \
             --title "build: ${bumped[*]} ${VERSION}" \
-            --body "Released by ${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG} and promoted (${bumped[*]} at \`${VERSION}\` in harbor.sirddail.net/ai) before this PR was opened."
+            --body "Released by ${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG} and promoted (${bumped[*]} at \`${VERSION}\` in harbor.sirddail.net/ai) before this PR was opened.
+
+          receipt-target: image-bump ns=gpu-batch workloads=${WORKLOADS}"
