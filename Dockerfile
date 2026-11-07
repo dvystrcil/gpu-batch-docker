@@ -14,8 +14,10 @@ FROM ubuntu:26.04 AS runner
 
 # psql: the guard's Obico tie-breaker (read-only role, column-level grant).
 # ca-certificates: the in-cluster API read of that role's Secret.
+# xvfb-run: for headless GUI apps (PrusaSlicer requires X11).
+# dash: POSIX shell required by gpu_batch.runner subprocess execution.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates \
+ && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates xvfb dash \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src/gpu_batch /opt/gpu-batch/gpu_batch
@@ -35,9 +37,9 @@ USER root
 # the set the 2026-11-05 probe on node-03 needed; nothing more.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libice6 \
-      libgl1 libegl1 libglu1-mesa libxext6 xz-utils curl \
- && rm -rf /var/lib/apt/lists/*
+       libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libice6 \
+       libgl1 libegl1 libglu1-mesa libxext6 xz-utils curl \
+  && rm -rf /var/lib/apt/lists/*
 
 # Official tarball, verified against the sha256 blender.org publishes in
 # blender-<ver>.sha256. Bump both together.
@@ -71,9 +73,10 @@ FROM runner AS freecad
 USER root
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      xvfb xauth libgl1 libegl1 libglu1-mesa libx11-6 libxext6 libxrender1 libxi6 \
-      libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 curl git \
- && rm -rf /var/lib/apt/lists/*
+       xvfb xauth libgl1 libegl1 libglu1-mesa libx11-6 libxext6 libxrender1 libxi6 \
+       libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 curl git \
+   && rm -rf /var/lib/apt/lists/*
+
 
 # Official AppImage from the FreeCAD GitHub release, verified against the
 # sha256 digest GitHub publishes for that release asset (FreeCAD publishes no
@@ -119,3 +122,44 @@ ENV FREECAD_APPIMAGE=/opt/freecad/AppRun \
     FASTENERS_REF=${FASTENERS_REF}
 
 USER 1000:1000
+
+
+FROM runner AS prusaslicer-cli
+
+# PrusaSlicer CLI (prusaslicer) for the vt350 gcode export checks.
+# CPU-only: no GPU required, runs on max-01, no NVIDIA env.
+# Uses Flatpak CLI installed in the image; invocation via flatpak run with xvfb-run
+# for headless operation. PrusaSlicer official releases contain Windows binaries only.
+USER root
+
+# Install Flatpak and flathub remote for com.prusa3d.PrusaSlicer.
+# sh (dash): required by gpu_batch.runner subprocess execution.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends flatpak xvfb dash \
+ && rm -rf /var/lib/apt/lists/*
+
+# Add flathub remote and install PrusaSlicer (v2.9.7).
+# Use --user to install for the runtime user; flatpak state persists across layers.
+RUN flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo \
+ && flatpak install --user --noninteractive flathub com.prusa3d.PrusaSlicer
+
+# Clean up apt but keep Flatpak for runtime use.
+RUN apt-get purge -y flatpak && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
+# Copy wrapper script that runs prusa-slicer via flatpak run with xvfb-run.
+COPY bin/smoke-test-prusaslicer.sh /usr/local/bin/smoke-test-prusaslicer
+RUN chmod 755 /usr/local/bin/smoke-test-prusaslicer
+
+# Copy wait-for-port script
+COPY bin/wait-for-port.py /usr/local/bin/wait-for-port.py
+RUN chmod 755 /usr/local/bin/wait-for-port.py
+
+# Create world-writable workdir for smoke-test output (uid 1000 runs as non-root).
+RUN mkdir -p /workdir && chmod 1777 /workdir
+
+ENV PRUSASLICER_VERSION=2.9.7 \
+    WORKDIR=/workdir
+
+USER 1000:1000
+WORKDIR /workdir
+ENTRYPOINT ["/usr/local/bin/smoke-test-prusaslicer"]

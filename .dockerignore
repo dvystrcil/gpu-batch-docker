@@ -4,3 +4,5 @@ tests
 **/__pycache__
 *.md
 bin
+!bin/smoke-test-prusaslicer.sh
+!bin/wait-for-port.py

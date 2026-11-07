@@ -40,6 +40,9 @@ jobs:
           - target: freecad
             image: gpu-batch-freecad
             smoke: bin/smoke-test-freecad.sh
+          - target: prusaslicer
+            image: gpu-batch-prusaslicer
+            smoke: bin/smoke-test-prusaslicer.sh
     permissions:
       contents: read
     steps:
@@ -70,6 +73,9 @@ jobs:
           - target: freecad
             image: gpu-batch-freecad
             smoke: bin/smoke-test-freecad.sh
+          - target: prusaslicer
+            image: gpu-batch-prusaslicer
+            smoke: bin/smoke-test-prusaslicer.sh
     permissions:
       contents: read
     steps:

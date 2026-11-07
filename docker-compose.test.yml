@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  fake-moonraker:
+    image: python:3.12-slim
+    command: >
+      sh -c "python3 -c '
+      import json, http.server, threading, time, sys
+      state = \"idle\"
+      if len(sys.argv) > 1:
+          state = sys.argv[1]
+      class H(http.server.BaseHTTPRequestHandler):
+          def log_message(self, *a): pass
+          def do_GET(self):
+              self.send_response(200)
+              self.send_header(\"Content-Type\", \"application/json\")
+              self.end_headers()
+              self.wfile.write(json.dumps({\"result\": {\"status\": {\"print_stats\": {\"state\": state}}}}).encode())
+      server = http.server.HTTPServer((\"0.0.0.0\", 7125), H)
+      print(\"Server bound to 0.0.0.0:7125\", file=sys.stderr, flush=True)
+      thread = threading.Thread(target=server.serve_forever)
+      thread.daemon = True
+      thread.start()
+      time.sleep(1)
+      print(\"Server ready on 0.0.0.0:7125\", file=sys.stderr, flush=True)
+      thread.join()
+      ' ${MOONRAKER_STATE:-idle}"
+    ports:
+      - "7125:7125"
+    environment:
+      - MOONRAKER_STATE
+
+  prusaslicer:
+    build:
+      context: .
+      target: prusaslicer-cli
+    depends_on:
+      - fake-moonraker
+    volumes:
+      - ./spec.json:/workdir/spec.json:ro
+      - ./test-output:/workdir/test-output
+    environment:
+      - GPU_BATCH_NOTIFY_URL=
+      - MOONRAKER_URL=http://fake-moonraker:7125
+      - WORKDIR=/workdir
+    entrypoint: >
+      sh -c "python3 /usr/local/bin/wait-for-port.py fake-moonraker 7125 10 &&
+             python3 -m gpu_batch.runner /workdir/spec.json"

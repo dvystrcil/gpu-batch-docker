@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [gpu-batch-blender, gpu-batch-freecad]
+        image: [gpu-batch-blender, gpu-batch-freecad, gpu-batch-prusaslicer]
 
     steps:
       # One named secret per step, never the whole store.
