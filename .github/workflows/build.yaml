@@ -23,7 +23,6 @@ on:
 env:
   INTERNAL_REGISTRY: harbor-core.harbor.svc.cluster.local
   PROJECT: ai
-  IMAGE_NAME: gpu-batch-blender
 
 jobs:
   # Build and RUN the image before anything is pushed: a green docker build
@@ -31,16 +30,26 @@ jobs:
   # guard refuses. CI has no GPU, so this renders on CPU (bin/smoke-test.sh).
   smoke:
     runs-on: gpu-batch-docker-runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: blender
+            image: gpu-batch-blender
+            smoke: bin/smoke-test.sh
+          - target: freecad
+            image: gpu-batch-freecad
+            smoke: bin/smoke-test-freecad.sh
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
 
       - name: Build image locally
-        run: docker build --target blender -t gpu-batch-blender:ci .
+        run: docker build --target ${{ matrix.target }} -t ${{ matrix.image }}:ci .
 
       - name: Smoke-test the built image
-        run: bin/smoke-test.sh gpu-batch-blender:ci | tee smoke.out
+        run: ${{ matrix.smoke }} ${{ matrix.image }}:ci | tee smoke.out
 
       # The script prints SMOKE-COMPLETE only as its last line; a crash that
       # still exits 0 would not reach it.
@@ -51,6 +60,16 @@ jobs:
     needs: smoke
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: gpu-batch-docker-runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: blender
+            image: gpu-batch-blender
+            smoke: bin/smoke-test.sh
+          - target: freecad
+            image: gpu-batch-freecad
+            smoke: bin/smoke-test-freecad.sh
     permissions:
       contents: read
     steps:
@@ -82,6 +101,63 @@ jobs:
           export-type: env
           domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
 
+      - name: Assert every scoped secret arrived
+        run: |
+          for v in HB_USERNAME HB_PASSWORD; do
+            [ -n "${!v}" ] || { echo "::error::$v not fetched — renamed in Infisical?"; exit 1; }
+          done
+
+      - name: Log in to Harbor (internal)
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.INTERNAL_REGISTRY }}
+          username: ${{ env.HB_USERNAME }}
+          password: ${{ env.HB_PASSWORD }}
+
+      - uses: docker/setup-buildx-action@v4
+        with:
+          buildkitd-config-inline: |
+            [registry."harbor-core.harbor.svc.cluster.local"]
+              ca=["/etc/ssl/certs/ca-certificates.crt"]
+
+      - name: Build + push (dev image)
+        env:
+          BUILDKIT_PROGRESS: plain
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          # amd64 only: both official upstream builds (Blender tarball, FreeCAD AppImage) are x86-64.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:dev
+            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:sha-${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:buildcache,mode=max
+
+      # The pushed artifact, not the smoke build, is what ships. Pull it back
+      # and assert it carries the pinned tool and the runner.
+      - name: Assert the pushed image runs
+        run: |
+          IMG="${INTERNAL_REGISTRY}/${PROJECT}/${{ matrix.image }}:sha-${GITHUB_SHA}"
+          case "${{ matrix.target }}" in
+            blender) docker run --rm --entrypoint blender "$IMG" --version | tee v.out
+                     grep -q '^Blender 5\.2\.' v.out ;;
+            freecad) docker run --rm --entrypoint freecadcmd "$IMG" --version | tee v.out
+                     grep -q '^FreeCAD 26\.3\.' v.out ;;
+          esac
+          docker run --rm "$IMG" --help | grep -q 'gpu-batch-run'
+
+  # One release per push, after EVERY image in the matrix is pushed and
+  # verified: a release fires docker-release.yaml, which promotes :dev of
+  # each image, so it must not run per matrix leg or before both exist.
+  release:
+    needs: build
+    runs-on: gpu-batch-docker-runner
+    permissions:
+      contents: read
+    steps:
       - name: Fetch the CICD App client id
         uses: Infisical/secrets-action@v1.0.18
         with:
@@ -108,48 +184,9 @@ jobs:
 
       - name: Assert every scoped secret arrived
         run: |
-          for v in HB_USERNAME HB_PASSWORD CICD_APP_CLIENT_ID CICD_APP_PRIVATE_KEY; do
+          for v in CICD_APP_CLIENT_ID CICD_APP_PRIVATE_KEY; do
             [ -n "${!v}" ] || { echo "::error::$v not fetched — renamed in Infisical?"; exit 1; }
           done
-
-      - name: Log in to Harbor (internal)
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.INTERNAL_REGISTRY }}
-          username: ${{ env.HB_USERNAME }}
-          password: ${{ env.HB_PASSWORD }}
-
-      - uses: docker/setup-buildx-action@v4
-        with:
-          buildkitd-config-inline: |
-            [registry."harbor-core.harbor.svc.cluster.local"]
-              ca=["/etc/ssl/certs/ca-certificates.crt"]
-
-      - name: Build + push (dev image)
-        env:
-          BUILDKIT_PROGRESS: plain
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          target: blender
-          # amd64 only: Blender's official tarball is x86-64, and the only
-          # consumer is the GTX 970 on k8s-node-03.
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:dev
-            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-
-      # The pushed artifact, not the smoke build, is what ships. Pull it back
-      # and assert it carries the pinned Blender and the runner.
-      - name: Assert the pushed image runs
-        run: |
-          IMG="${INTERNAL_REGISTRY}/${PROJECT}/${IMAGE_NAME}:sha-${GITHUB_SHA}"
-          docker run --rm --entrypoint blender "$IMG" --version | tee v.out
-          grep -q '^Blender 5\.2\.' v.out
-          docker run --rm "$IMG" --help | grep -q 'gpu-batch-run'
 
       - uses: actions/create-github-app-token@v3
         id: app-token
