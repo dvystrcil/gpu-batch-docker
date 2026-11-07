@@ -152,8 +152,12 @@ jobs:
           if git diff --quiet; then echo "already at ${VERSION}"; exit 0; fi
           [ "$(git diff --numstat | awk '{print $1+$2}')" -le $((2 * ${#bumped[@]})) ] || { git diff; echo "::error::bump touched more than one line per image"; exit 1; }
           BR="bump/gpu-batch-${VERSION}"
-          git config user.name "gpu-batch-docker release"
-          git config user.email "noreply@github.com"
+          # homelab's auto-merge gate (bin/pr-auto-merge.py, image-bump) needs
+          # every commit authored by homelab-bump-bot, as bump-image-tag.py
+          # writes them. noreply@github.com is attributed to `web-flow`, and
+          # the gate held every bump for a human (gpu-batch#14).
+          git config user.name "homelab-bump-bot"
+          git config user.email "noreply@sirddail.net"
           git checkout -b "$BR"
           git commit -qam "build: ${bumped[*]} ${VERSION}"
           git push -q origin "$BR"
