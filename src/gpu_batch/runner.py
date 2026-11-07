@@ -8,6 +8,10 @@ Contract (homelab#1935). A job is a directory on the shared work volume:
                         stdout cannot push the actual error out of the tail
     <job>/status.json   the result (written here, atomically, at every transition)
 
+    The runner's LAST stdout line (the pod log) is "GPU-BATCH-STATUS " plus the
+    final status.json on one line, for readers that cannot see the work share
+    (an n8n chain, homelab#1961).
+
 spec.json:
     {
       "id": "...",
@@ -58,6 +62,8 @@ from pathlib import Path
 EXIT_OK, EXIT_FAILED, EXIT_UNREPORTED_SUCCESS, EXIT_REFUSED = 0, 1, 2, 3
 _UNREPORTED_EXIT = {"succeeded": EXIT_UNREPORTED_SUCCESS, "refused": EXIT_REFUSED}
 LOG_TAIL_CHARS = 4000
+# The runner's last stdout line: "GPU-BATCH-STATUS " + status.json as one line.
+STATUS_LINE_PREFIX = "GPU-BATCH-STATUS "
 # The Job's activeDeadlineSeconds kills the pod with no chance to report, so
 # the runner gives up this long before it and reports the timeout itself.
 DEADLINE_MARGIN_S = 120
@@ -281,6 +287,10 @@ def run(spec_path: Path, guard, notifier, watch=lambda: None, deadline_s: float 
     job.write()
     print(f"GPU-BATCH-RESULT {job.status['id']} {state}: {reason}"
           + ("" if job.status["notified"] else f" (NOT REPORTED: {job.status['notify_error']})"), flush=True)
+    # LAST line, always: status.json itself on one line (json.dumps escapes
+    # every newline in the log tail). An n8n chain cannot see the work share,
+    # so it reads the step's result here, from the pod log (homelab#1961).
+    print(STATUS_LINE_PREFIX + json.dumps(job.status, separators=(",", ":")), flush=True)
     if job.status["notified"]:
         return EXIT_OK
     return _UNREPORTED_EXIT.get(state, EXIT_FAILED)
