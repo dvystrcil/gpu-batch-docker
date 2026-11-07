@@ -1,6 +1,7 @@
 # Promote `:dev` to semver release tags when a GitHub release is published.
 # No rebuild: re-tag the :dev that build.yaml pushed and smoke-tested, to
-# {{version}} and {{major}}.{{minor}} (no `v` prefix on image tags).
+# {{version}} and {{major}}.{{minor}} (no `v` prefix on image tags). Every
+# image build.yaml pushes is promoted to the same version.
 
 name: docker-release
 
@@ -11,11 +12,14 @@ on:
 env:
   INTERNAL_REGISTRY: harbor-core.harbor.svc.cluster.local
   PROJECT: ai
-  IMAGE_NAME: gpu-batch-blender
 
 jobs:
   promote:
     runs-on: gpu-batch-docker-runner
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [gpu-batch-blender, gpu-batch-freecad]
 
     steps:
       # One named secret per step, never the whole store.
@@ -61,7 +65,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -70,18 +74,19 @@ jobs:
         run: |
           for TAG in $(jq -cr '[.tags[]] | unique | .[]' <<< "$DOCKER_METADATA_OUTPUT_JSON"); do
             docker buildx imagetools create -t "$TAG" \
-              ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:dev
+              ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:dev
           done
 
       - name: Inspect image
         run: |
           docker buildx imagetools inspect \
-            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+            ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}
 
   # The deploy repo's only workload is a suspended CronJob (the Job
   # template). argocd-image-updater cannot see CronJobs (homelab#951), so
   # the bump is a PR opened here, after promote, when the tag is known to
-  # exist in Harbor.
+  # exist in Harbor for EVERY image. One PR bumps each image the deploy repo
+  # lists; an image it does not list yet (no template) is skipped, not added.
   bump-deploy-repo:
     needs: promote
     runs-on: gpu-batch-docker-runner
@@ -132,17 +137,26 @@ jobs:
           VERSION="${TAG#v}"   # git tags are v-prefixed, image tags are not
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::unexpected tag $TAG"; exit 1; }
           F=overlays/kustomization.yaml
-          # Targeted one-line edit, never a YAML round-trip.
-          grep -q '^  newTag: ' "$F" || { echo "::error::no newTag line in $F"; exit 1; }
-          sed -i "s/^  newTag: .*/  newTag: ${VERSION}/" "$F"
+          # Targeted edit of the newTag line under each image's name line,
+          # never a YAML round-trip.
+          bumped=()
+          for IMG in gpu-batch-blender gpu-batch-freecad; do
+            NAME="- name: harbor.sirddail.net/ai/${IMG}"
+            if ! grep -qxF -e "$NAME" "$F"; then echo "::notice::${IMG} not in $F yet, skipped"; continue; fi
+            N=$(grep -nxF -e "$NAME" "$F" | cut -d: -f1)
+            sed -n "$((N+1))p" "$F" | grep -q '^  newTag: ' || { echo "::error::no newTag line under ${IMG} in $F"; exit 1; }
+            sed -i "$((N+1))s/^  newTag: .*/  newTag: ${VERSION}/" "$F"
+            bumped+=("$IMG")
+          done
+          [ "${#bumped[@]}" -gt 0 ] || { echo "::error::no image of ours in $F"; exit 1; }
           if git diff --quiet; then echo "already at ${VERSION}"; exit 0; fi
-          [ "$(git diff --numstat | awk '{print $1+$2}')" = 2 ] || { git diff; echo "::error::bump touched more than one line"; exit 1; }
-          BR="bump/gpu-batch-blender-${VERSION}"
+          [ "$(git diff --numstat | awk '{print $1+$2}')" -le $((2 * ${#bumped[@]})) ] || { git diff; echo "::error::bump touched more than one line per image"; exit 1; }
+          BR="bump/gpu-batch-${VERSION}"
           git config user.name "gpu-batch-docker release"
           git config user.email "noreply@github.com"
           git checkout -b "$BR"
-          git commit -qam "build: gpu-batch-blender ${VERSION}"
+          git commit -qam "build: ${bumped[*]} ${VERSION}"
           git push -q origin "$BR"
           gh pr create --repo dvystrcil/gpu-batch --head "$BR" \
-            --title "build: gpu-batch-blender ${VERSION}" \
-            --body "Released by ${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG} and promoted to \`harbor.sirddail.net/ai/gpu-batch-blender:${VERSION}\` before this PR was opened."
+            --title "build: ${bumped[*]} ${VERSION}" \
+            --body "Released by ${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG} and promoted (${bumped[*]} at \`${VERSION}\` in harbor.sirddail.net/ai) before this PR was opened."

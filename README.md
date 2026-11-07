@@ -5,6 +5,7 @@ Build repo for the **GPU batch lane** on the GTX 970 (`k8s-node-03`): fire-and-f
 | Image | Contents |
 |---|---|
 | `harbor.sirddail.net/ai/gpu-batch-blender` | Ubuntu 26.04, Blender 5.2.2 LTS (official tarball, sha256-pinned), the `gpu_batch` runner, psql |
+| `harbor.sirddail.net/ai/gpu-batch-freecad` | Ubuntu 26.04, FreeCAD 26.3rc2 (official AppImage, sha256-pinned, extracted), Fasteners workbench 0.5.64 (commit-pinned), `xvfb-run`, the `gpu_batch` runner, psql. CPU-only (max-01) |
 
 Deployed by [`dvystrcil/gpu-batch`](https://github.com/dvystrcil/gpu-batch) (Job templates), submitted with `homelab/bin/gpu-batch-submit.py`.
 
@@ -31,8 +32,12 @@ Adding a workload: add a `FROM runner AS <name>` stage and a build step, plus a 
 python3 -m pytest -q                                   # unit + composition tests (python 3.14 = the image)
 docker build --target blender -t gpu-batch-blender:local .
 bin/smoke-test.sh gpu-batch-blender:local              # CPU render through the real entrypoint, plus a refusal
+docker build --target freecad -t gpu-batch-freecad:local .
+bin/smoke-test-freecad.sh gpu-batch-freecad:local      # headless Fasteners screw + GUI mode under xvfb-run, plus a refusal
 ```
 
 Bumping Blender: change `BLENDER_VERSION` and `BLENDER_SHA256` together, both taken from `https://download.blender.org/release/Blender<major.minor>/blender-<ver>.sha256`.
+
+Bumping FreeCAD: change `FREECAD_VERSION` and `FREECAD_SHA256` together. The checksum is the `digest` GitHub publishes for the `FreeCAD_<ver>-Linux-x86_64.AppImage` asset (`gh api repos/FreeCAD/FreeCAD/releases/tags/<ver> --jq '.assets[]|.name+" "+.digest'`); FreeCAD ships no separate checksum file. Fasteners: change `FASTENERS_REF` and `FASTENERS_COMMIT` together (the build fails if the fetched commit is not the pinned one). In GUI mode FreeCAD *imports* a `.py` argument as a module, so a script whose name shadows a loaded module (e.g. `gui.py`) never runs.
 
 Licensed [MIT](LICENSE).
