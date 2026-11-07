@@ -25,42 +25,46 @@ env:
   PROJECT: ai
 
 jobs:
-  # Build and RUN the image before anything is pushed: a green docker build
-  # says nothing about whether Blender starts, the runner imports, or the
-  # guard refuses. CI has no GPU, so this renders on CPU (bin/smoke-test.sh).
-  smoke:
+  # Build every image and RUN them chained, before anything is pushed: a
+  # green docker build says nothing about whether the tool starts, the runner
+  # imports, the guard refuses, or the webhook fires. One compose run per
+  # case (tests/compose/, gpu-batch-docker#10): freecad -> prusaslicer and
+  # blender in parallel, against a mock Moonraker and a webhook sink. CI has
+  # no GPU, so blender renders on CPU. This replaces the per-image smoke
+  # scripts; see the README's "Testing the images".
+  compose-test:
     runs-on: gpu-batch-docker-runner
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: blender
-            image: gpu-batch-blender
-            smoke: bin/smoke-test.sh
-          - target: freecad
-            image: gpu-batch-freecad
-            smoke: bin/smoke-test-freecad.sh
-          - target: prusaslicer
-            image: gpu-batch-prusaslicer
-            smoke: bin/smoke-test-prusaslicer.sh
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build image locally
-        run: docker build --target ${{ matrix.target }} -t ${{ matrix.image }}:ci .
+      # Compose v2 is a plugin in the homelab-built runner image
+      # (arc-runner-docker); fail here, not halfway through, if it's gone.
+      - name: Docker Compose is available
+        run: docker compose version
 
-      - name: Smoke-test the built image
-        run: ${{ matrix.smoke }} ${{ matrix.image }}:ci | tee smoke.out
+      - name: Build the images
+        run: |
+          for t in runner freecad prusaslicer blender; do
+            docker build --target "$t" -t "gpu-batch-$t:ci" .
+          done
 
-      # The script prints SMOKE-COMPLETE only as its last line; a crash that
-      # still exits 0 would not reach it.
-      - name: Assert the smoke test completed
-        run: grep -qx 'SMOKE-COMPLETE' smoke.out
+      - name: Run every harness case against the built images
+        env:
+          RUNNER_IMAGE: gpu-batch-runner:ci
+          FREECAD_IMAGE: gpu-batch-freecad:ci
+          PRUSASLICER_IMAGE: gpu-batch-prusaslicer:ci
+          BLENDER_IMAGE: gpu-batch-blender:ci
+        run: bin/compose-test.sh | tee compose-test.out
+
+      # The driver prints COMPOSE-TEST-OK only as its last line, and only if
+      # every case's assert did; a crash that still exits 0 would not reach it.
+      - name: Assert the harness completed
+        run: test "$(tail -n 1 compose-test.out)" = COMPOSE-TEST-OK
 
   build:
-    needs: smoke
+    needs: compose-test
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: gpu-batch-docker-runner
     strategy:
@@ -69,13 +73,10 @@ jobs:
         include:
           - target: blender
             image: gpu-batch-blender
-            smoke: bin/smoke-test.sh
           - target: freecad
             image: gpu-batch-freecad
-            smoke: bin/smoke-test-freecad.sh
           - target: prusaslicer
             image: gpu-batch-prusaslicer
-            smoke: bin/smoke-test-prusaslicer.sh
     permissions:
       contents: read
     steps:
@@ -142,7 +143,7 @@ jobs:
           cache-from: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:buildcache
           cache-to: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:buildcache,mode=max
 
-      # The pushed artifact, not the smoke build, is what ships. Pull it back
+      # The pushed artifact, not the compose-test build, is what ships. Pull it back
       # and assert it carries the pinned tool and the runner.
       - name: Assert the pushed image runs
         run: |

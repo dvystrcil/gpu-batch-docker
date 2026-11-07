@@ -1,5 +1,5 @@
 # Promote `:dev` to semver release tags when a GitHub release is published.
-# No rebuild: re-tag the :dev that build.yaml pushed and smoke-tested, to
+# No rebuild: re-tag the :dev that build.yaml pushed after the compose harness passed, to
 # {{version}} and {{major}}.{{minor}} (no `v` prefix on image tags). Every
 # image build.yaml pushes is promoted to the same version.
 
