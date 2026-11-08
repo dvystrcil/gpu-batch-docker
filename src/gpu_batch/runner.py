@@ -81,7 +81,7 @@ class Job:
             "started": _now(), "finished": None, "steps": [], "outputs": [],
             "log_tail": "", "notify": None, "notified": None, "notify_error": None,
             "image": os.environ.get("GPU_BATCH_IMAGE"), "node": os.environ.get("NODE_NAME") or socket.gethostname(),
-            "guard": None,
+            "guard": None, "status_write_error": None,
         }
         self.log_path = self.dir / "job.log"
         self.err_path = self.dir / "job.err"
@@ -243,6 +243,11 @@ def run(spec_path: Path, guard, notifier, watch=lambda: None, deadline_s: float 
     t0 = time.monotonic()
     state, reason = "failed", ""
     try:
+        if not job.dir.is_dir():
+            # A Job that kept a placeholder path (/work/TEMPLATE/spec.json).
+            # There is nowhere to write status.json; the status line still
+            # prints (gpu-batch-docker#18).
+            raise FileNotFoundError(f"job dir {job.dir} does not exist (spec {spec_path})")
         spec = load_spec(spec_path)
         job.status["id"] = spec.get("id", job.status["id"])
         job.status["notify"] = spec.get("notify")
@@ -284,7 +289,12 @@ def run(spec_path: Path, guard, notifier, watch=lambda: None, deadline_s: float 
         job.status["notified"] = True
     except Exception as e:
         job.status["notified"], job.status["notify_error"] = False, f"{type(e).__name__}: {e}"
-    job.write()
+    # The final write cannot stop the two lines below: they are the contract
+    # an n8n chain reads, and the job dir may be gone (gpu-batch-docker#18).
+    try:
+        job.write()
+    except OSError as e:
+        job.status["status_write_error"] = f"{type(e).__name__}: {e}"
     print(f"GPU-BATCH-RESULT {job.status['id']} {state}: {reason}"
           + ("" if job.status["notified"] else f" (NOT REPORTED: {job.status['notify_error']})"), flush=True)
     # LAST line, always: status.json itself on one line (json.dumps escapes

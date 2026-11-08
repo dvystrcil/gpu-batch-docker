@@ -373,3 +373,40 @@ def test_status_line_reports_an_unreported_result_too(tmp_path, capsys):
     run(job, notifier=Recorder(fail=True))
     printed = status_line(capsys.readouterr().out)
     assert printed["state"] == "succeeded" and printed["notified"] is False
+
+
+# ------------------------------- missing job dir (gpu-batch-docker#18)
+#
+# A spec path whose directory does not exist (a Job that kept the
+# /work/TEMPLATE placeholder) has nowhere to write status.json. The status
+# line is still the contract the chain reads, so it must still print LAST,
+# with a reason that names the missing directory and the failed write.
+
+@pytest.mark.parametrize("notifier,rc_want", [
+    (Recorder(), runner.EXIT_OK),
+    (Recorder(fail=True), runner.EXIT_FAILED),
+])
+def test_missing_job_dir_still_prints_the_status_line(tmp_path, capsys, notifier, rc_want):
+    notifier.sent.clear()
+    missing = tmp_path / "TEMPLATE"
+    rc = runner.run(missing / "spec.json", guard=allow, notifier=notifier, watch=lambda: None)
+    printed = status_line(capsys.readouterr().out)
+    assert rc == rc_want
+    assert printed["state"] == "failed"
+    assert "job dir" in printed["reason"] and str(missing) in printed["reason"]
+    assert printed["status_write_error"] and "FileNotFoundError" in printed["status_write_error"]
+    assert [s["state"] for s in notifier.sent] == ["failed"]
+    assert not missing.exists()  # the runner does not invent the job dir
+
+
+def test_job_dir_removed_mid_run_still_prints_the_status_line(tmp_path, capsys):
+    job = make_job(tmp_path, [py_step("import shutil,sys; shutil.rmtree(sys.argv[1])", "{job}")])
+    rc = runner.run(job / "spec.json", guard=allow, notifier=Recorder(), watch=lambda: None)
+    printed = status_line(capsys.readouterr().out)
+    assert rc == runner.EXIT_OK
+    assert printed["state"] == "failed" and printed["status_write_error"]
+
+
+def test_status_write_error_is_null_when_the_write_succeeds(tmp_path):
+    _, st, _ = run(make_job(tmp_path, [py_step(WRITE_PNGS, "{job}/out")]))
+    assert st["status_write_error"] is None
