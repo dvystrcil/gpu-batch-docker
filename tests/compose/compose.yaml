@@ -2,7 +2,8 @@
 # Run it with bin/compose-test.sh, which sets CASE and the per-case env.
 #
 #   seed -> freecad -> prusaslicer -+-> assert
-#                   \-> blender ----+
+#                   +-> orcaslicer --+
+#                   \-> blender -----+
 #   moonraker-mock (guard), notify-sink (completion webhook), print-starter
 #
 # No bind mounts: on the ARC runners Docker is a DinD sidecar, so a host path
@@ -84,6 +85,19 @@ services:
       # Nothing may be written outside --datadir (a pod's HOME need not be writable).
       HOME: /nonexistent
 
+  orcaslicer:
+    <<: *tool
+    image: ${ORCASLICER_IMAGE:-gpu-batch-orcaslicer:local}
+    command: [/work/orcaslicer/spec.json]
+    depends_on:
+      <<: *tool-deps
+      freecad: {condition: service_completed_successfully}
+    environment:
+      <<: *tool-env
+      GPU_BATCH_PRINT_GUARD: "off"
+      # Nothing may be written outside --datadir (a pod's HOME need not be writable).
+      HOME: /nonexistent
+
   blender:
     <<: *tool
     image: ${BLENDER_IMAGE:-gpu-batch-blender:local}
@@ -112,8 +126,10 @@ services:
     environment:
       EXPECT_FREECAD: ${EXPECT_FREECAD:-26.3.0}
       EXPECT_PRUSASLICER: ${EXPECT_PRUSASLICER:-2.9.7}
+      EXPECT_ORCASLICER: ${EXPECT_ORCASLICER:-2.5.0}
     depends_on:
       prusaslicer: {condition: service_completed_successfully}
+      orcaslicer: {condition: service_completed_successfully}
       blender: {condition: service_completed_successfully}
       print-starter: {condition: service_completed_successfully}
     volumes: [work:/work]
