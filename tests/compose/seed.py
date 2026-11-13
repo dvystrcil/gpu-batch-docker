@@ -42,6 +42,11 @@ def specs(case: str) -> dict:
                                 "--datadir {job}/tmp/datadir --export-gcode --center 100,100 "
                                 "--output {job}/out/part.gcode /work/freecad/out/part.stl"]}],
             "expect_outputs": ["out/part.gcode"], "min_outputs": 1},
+        "orcaslicer": {
+            "id": "orcaslicer", "notify": NOTIFY,
+            "steps": [{"name": "slice", "timeout_s": 300,
+                       "argv": ["sh", "/work/_fixtures/orca_slice.sh", "{job}", "/work/freecad/out/part.stl"]}],
+            "expect_outputs": ["out/plate_1.gcode", "out/plate_1.statistics.json"], "min_outputs": 2},
         "blender": {
             "id": "blender", "notify": NOTIFY,
             "steps": [{"name": "render", "timeout_s": 600, "argv": blender_argv}],

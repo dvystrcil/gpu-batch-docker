@@ -26,6 +26,10 @@ no-gpu-so-guard-off-honoured|guard-ignored|-|tests/compose/check.py|"blender_env
 image-without-the-slicer|chain|PRUSASLICER_IMAGE=gpu-batch-runner:local|-||
 freecad-version-drift|chain|EXPECT_FREECAD=26.4.0|-||
 prusaslicer-version-drift|chain|EXPECT_PRUSASLICER=2.9.8|-||
+image-without-orcaslicer|chain|ORCASLICER_IMAGE=gpu-batch-prusaslicer:local|-||
+orcaslicer-version-drift|chain|EXPECT_ORCASLICER=2.5.1|-||
+orca-system-profiles-not-installed|chain|-|tests/compose/fixtures/orca_slice.sh|orca-datadir "$dd" ${ORCA_VENDORS:-Elegoo OrcaFilamentLibrary}|orca-datadir "$dd" OrcaFilamentLibrary
+orca-user-filament-ignored|chain|-|tests/compose/fixtures/orca_slice.sh|--load-filaments "$f" |
 gui-step-runs-headless|chain|-|tests/compose/seed.py|exec xvfb-run -a freecad /work/_fixtures/fc_gui_check.py|exec freecadcmd /work/_fixtures/fc_gui_check.py
 image-without-freecad|chain|FREECAD_IMAGE=gpu-batch-blender:local|-||
 assert-dies-before-marker|chain|-|tests/compose/check.py|    print("COMPOSE-TEST-OK", flush=True)\n|    raise SystemExit(0)\n

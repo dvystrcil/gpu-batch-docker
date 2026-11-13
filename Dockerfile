@@ -8,6 +8,8 @@
 #            harbor.sirddail.net/ai/gpu-batch-freecad. CPU-only.
 #   prusaslicer  runner + PrusaSlicer (Flathub build, run without flatpak),
 #            published as harbor.sirddail.net/ai/gpu-batch-prusaslicer. CPU-only.
+#   orcaslicer  runner + OrcaSlicer (Flathub build, run without flatpak),
+#            published as harbor.sirddail.net/ai/gpu-batch-orcaslicer. CPU-only.
 #
 # A new workload (ffmpeg, PyTorch, ...) is another `FROM runner AS <x>` stage
 # plus a build step, not a new repo.
@@ -179,5 +181,71 @@ RUN set -eux; \
 
 ARG PRUSASLICER_VERSION=2.9.7
 ENV PRUSASLICER_VERSION=${PRUSASLICER_VERSION}
+
+USER 1000:1000
+
+
+# OrcaSlicer for the vt350 slice checks' estimates (gpu-batch-docker#13).
+# Orca does publish Linux assets on GitHub (an Ubuntu 24.04 AppImage and a
+# .flatpak bundle, both with digests), but the laptop prints from Flathub's
+# com.orcaslicer.OrcaSlicer. Taking that same build means a cluster slice is
+# byte-comparable with a laptop slice (AC5), and it runs on the very GNOME 50
+# runtime commit the PrusaSlicer stage already pins. Same mechanics as
+# prusaslicer-fetch: install with flatpak, pin both ostree commits, copy files.
+FROM ubuntu:26.04 AS orcaslicer-fetch
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG ORCASLICER_VERSION=2.5.0
+ARG ORCASLICER_COMMIT=e6c923c16c51c60d015167c442e4b1f387ce75e07f6e6dce19c8c3b124dd167c
+ARG GNOME_RUNTIME=50
+ARG GNOME_RUNTIME_COMMIT=4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends flatpak ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    app=app/com.orcaslicer.OrcaSlicer/x86_64/stable; \
+    rt=runtime/org.gnome.Platform/x86_64/${GNOME_RUNTIME}; \
+    flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo; \
+    flatpak install --system -y --noninteractive --no-related flathub "$app"; \
+    flatpak update --system -y --noninteractive --no-related --no-deps --commit="${ORCASLICER_COMMIT}" "$app"; \
+    flatpak update --system -y --noninteractive --no-related --no-deps --commit="${GNOME_RUNTIME_COMMIT}" "$rt"; \
+    test "$(flatpak info --system --show-commit "$app")" = "${ORCASLICER_COMMIT}"; \
+    test "$(flatpak info --system --show-commit "$rt")" = "${GNOME_RUNTIME_COMMIT}"; \
+    flatpak info --system "$app" | grep -qE "^ *Version: ${ORCASLICER_VERSION}$"; \
+    flatpak info --system "$app" | grep -qE "^ *Runtime: org.gnome.Platform/x86_64/${GNOME_RUNTIME}$"; \
+    mkdir -p /out/runtime; \
+    cp -a "$(flatpak info --system --show-location "$app")/files" /out/app; \
+    cp -a "$(flatpak info --system --show-location "$rt")/files/lib" /out/runtime/lib
+
+
+FROM runner AS orcaslicer
+
+# CPU-only: runs on max-01 with GPU_BATCH_PRINT_GUARD=off (no GPU visible).
+# Flathub's Orca is an FHS build: its resources path is compiled in as
+# /app/share/OrcaSlicer, so the app goes to /app, as inside the sandbox.
+# The binary runs on the runtime's own loader and libs, never Ubuntu's.
+# LC_NUMERIC=C is what the flatpak's entrypoint sets (BambuStudio#3440).
+#
+# Headless use (AC3, read from v2.5.0's src/OrcaSlicer.cpp): user presets
+# with `inherits` resolve only against <datadir>/system, which the GUI fills
+# by copying resources/profiles/<Vendor>.opc there on first run and the CLI
+# never does; and a user preset must sit in <datadir>/user/default/<type>/
+# (matched by file identity). `orca-datadir <dir> <Vendor>...` lays out the
+# system half. rsvg-convert: slice-check.py's G-code plot.
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends librsvg2-bin \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=orcaslicer-fetch /out/app /app
+COPY --from=orcaslicer-fetch /out/runtime /opt/orcaslicer/runtime
+RUN set -eux; \
+    rtlib=/opt/orcaslicer/runtime/lib/x86_64-linux-gnu; \
+    printf '#!/bin/sh\nexport LC_NUMERIC=C\nexec %s/ld-linux-x86-64.so.2 --library-path /app/lib:%s /app/bin/orca-slicer "$@"\n' "$rtlib" "$rtlib" \
+      > /usr/local/bin/orca-slicer; \
+    printf '#!/bin/sh\n# orca-datadir DIR VENDOR...: install vendors system profiles into DIR/system, as the GUI does on first run\nset -eu\nd=$1; shift\nmkdir -p "$d/system" "$d/user/default/machine" "$d/user/default/process" "$d/user/default/filament"\nfor v in "$@"; do cp /app/share/OrcaSlicer/profiles/"$v".opc "$d/system/"; done\n' \
+      > /usr/local/bin/orca-datadir; \
+    chmod 755 /usr/local/bin/orca-slicer /usr/local/bin/orca-datadir
+
+ARG ORCASLICER_VERSION=2.5.0
+ENV ORCASLICER_VERSION=${ORCASLICER_VERSION}
 
 USER 1000:1000

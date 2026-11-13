@@ -7,7 +7,7 @@
 # own project name, so cases share nothing; `down -v` removes the containers
 # and the work volume on every exit path. Images come from the environment,
 # so CI tests the images it just built:
-#   FREECAD_IMAGE, PRUSASLICER_IMAGE, BLENDER_IMAGE   (default <name>:local)
+#   FREECAD_IMAGE, PRUSASLICER_IMAGE, ORCASLICER_IMAGE, BLENDER_IMAGE   (default <name>:local)
 #   RUNNER_IMAGE                                      (the harness's base; default gpu-batch-runner:local)
 # Test knobs (to prove the harness goes red): SINK_FAIL=<http code>,
 # MOCK_STATE=<state> overrides the case's printer state.
@@ -20,6 +20,7 @@ cd "$(dirname "$0")/.."
 F=tests/compose/compose.yaml
 export FREECAD_IMAGE=${FREECAD_IMAGE:-gpu-batch-freecad:local}
 export PRUSASLICER_IMAGE=${PRUSASLICER_IMAGE:-gpu-batch-prusaslicer:local}
+export ORCASLICER_IMAGE=${ORCASLICER_IMAGE:-gpu-batch-orcaslicer:local}
 export BLENDER_IMAGE=${BLENDER_IMAGE:-gpu-batch-blender:local}
 export RUNNER_IMAGE=${RUNNER_IMAGE:-gpu-batch-runner:local}
 export HARNESS_TAG=${HARNESS_TAG:-local-$$}
@@ -27,9 +28,9 @@ mapfile -t ALL < <(python3 -c 'import sys; sys.path.insert(0, "tests/compose"); 
 CASES_RUN=("$@")
 [ ${#CASES_RUN[@]} -gt 0 ] || CASES_RUN=("${ALL[@]}")
 
-for img in "$FREECAD_IMAGE" "$PRUSASLICER_IMAGE" "$BLENDER_IMAGE" "$RUNNER_IMAGE"; do
+for img in "$FREECAD_IMAGE" "$PRUSASLICER_IMAGE" "$ORCASLICER_IMAGE" "$BLENDER_IMAGE" "$RUNNER_IMAGE"; do
   docker image inspect "$img" >/dev/null 2>&1 || {
-    echo "missing image $img: docker build --target <freecad|prusaslicer|blender|runner> -t <name>:local ." >&2
+    echo "missing image $img: docker build --target <freecad|prusaslicer|orcaslicer|blender|runner> -t <name>:local ." >&2
     echo "COMPOSE-TEST-FAILED"; exit 1; }
 done
 
@@ -74,12 +75,12 @@ for case in "${CASES_RUN[@]}"; do
   else
     echo "--- case $case: FAILED (compose run exit $rc); compose log tail:"
     tail -n 40 "$LOGDIR/$p.log"
-    for t in freecad prusaslicer blender; do
+    for t in freecad prusaslicer orcaslicer blender; do
       docker compose -p "$p" -f "$F" logs --no-log-prefix "$t" 2>/dev/null | tail -n 5 | sed "s/^/  [$t] /"
     done
     # The jobs' own stderr, read from the work volume (no bind mount to read it from).
     docker compose -p "$p" -f "$F" run --rm --no-deps -T assert sh -c \
-      'for t in freecad prusaslicer blender; do [ -f /work/$t/job.err ] && tail -n 15 /work/$t/job.err | sed "s/^/  [$t job.err] /"; done' 2>/dev/null || true
+      'for t in freecad prusaslicer orcaslicer blender; do [ -f /work/$t/job.err ] && tail -n 15 /work/$t/job.err | sed "s/^/  [$t job.err] /"; done' 2>/dev/null || true
     failed+=("$case")
   fi
   rm -f "$LOGDIR/$p.log" "$LOGDIR/$p.assert"

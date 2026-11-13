@@ -46,7 +46,7 @@ jobs:
 
       - name: Build the images
         run: |
-          for t in runner freecad prusaslicer blender; do
+          for t in runner freecad prusaslicer orcaslicer blender; do
             docker build --target "$t" -t "gpu-batch-$t:ci" .
           done
 
@@ -55,6 +55,7 @@ jobs:
           RUNNER_IMAGE: gpu-batch-runner:ci
           FREECAD_IMAGE: gpu-batch-freecad:ci
           PRUSASLICER_IMAGE: gpu-batch-prusaslicer:ci
+          ORCASLICER_IMAGE: gpu-batch-orcaslicer:ci
           BLENDER_IMAGE: gpu-batch-blender:ci
         run: bin/compose-test.sh | tee compose-test.out
 
@@ -77,6 +78,8 @@ jobs:
             image: gpu-batch-freecad
           - target: prusaslicer
             image: gpu-batch-prusaslicer
+          - target: orcaslicer
+            image: gpu-batch-orcaslicer
     permissions:
       contents: read
       id-token: write
@@ -135,7 +138,7 @@ jobs:
         with:
           context: .
           target: ${{ matrix.target }}
-          # amd64 only: every upstream build (Blender tarball, FreeCAD AppImage, PrusaSlicer's Flathub x86_64 ref) is x86-64.
+          # amd64 only: every upstream build (Blender tarball, FreeCAD AppImage, the slicers' Flathub x86_64 refs) is x86-64.
           platforms: linux/amd64
           push: true
           tags: |
@@ -157,6 +160,9 @@ jobs:
             prusaslicer) docker run --rm --entrypoint prusa-slicer "$IMG" --help > v.out
                      head -n 1 v.out
                      grep -q '^PrusaSlicer-2\.9\.7+' v.out ;;
+            orcaslicer) docker run --rm --entrypoint orca-slicer "$IMG" --help > v.out
+                     head -n 1 v.out
+                     grep -q '^OrcaSlicer-2\.5\.0:' v.out ;;
           esac
           docker run --rm "$IMG" --help | grep -q 'gpu-batch-run'
 
