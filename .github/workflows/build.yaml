@@ -36,6 +36,7 @@ jobs:
     runs-on: gpu-batch-docker-runner
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -44,10 +45,62 @@ jobs:
       - name: Docker Compose is available
         run: docker compose version
 
+      # The layer cache lives in Harbor, the same :buildcache refs the build job
+      # uses. The runner's DinD sidecar starts empty every run, so without it each
+      # PR and then main again rebuilt every image from scratch: ~7 min, mostly
+      # downloading Blender, FreeCAD and two Flathub apps. Now the PR fills the
+      # cache, main's compose-test reuses it, and the build job only pushes.
+      - name: Fetch the Harbor username
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: HB_USERNAME
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the Harbor password
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: HB_PASSWORD
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Log in to Harbor (internal)
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ${{ env.INTERNAL_REGISTRY }}
+          username: ${{ env.HB_USERNAME }}
+          password: ${{ env.HB_PASSWORD }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."harbor-core.harbor.svc.cluster.local"]
+              ca=["/etc/ssl/certs/ca-certificates.crt"]
+
+      # --load puts each image in the sidecar's daemon for compose. The runner
+      # stage has no cache ref of its own: every tool image's mode=max cache holds
+      # its layers. A cache write that fails is a slower next run, not a red CI.
       - name: Build the images
         run: |
+          set -euo pipefail
+          cache() { echo "type=registry,ref=${INTERNAL_REGISTRY}/${PROJECT}/gpu-batch-$1:buildcache"; }
           for t in runner freecad prusaslicer orcaslicer blender; do
-            docker build --target "$t" -t "gpu-batch-$t:ci" .
+            if [ "$t" = runner ]; then
+              docker buildx build --load --target runner -t gpu-batch-runner:ci --cache-from "$(cache blender)" .
+            else
+              docker buildx build --load --target "$t" -t "gpu-batch-$t:ci" \
+                --cache-from "$(cache "$t")" --cache-to "$(cache "$t"),mode=max,ignore-error=true" .
+            fi
           done
 
       - name: Run every harness case against the built images
@@ -157,12 +210,16 @@ jobs:
                      grep -q '^Blender 5\.2\.' v.out ;;
             freecad) docker run --rm --entrypoint freecadcmd "$IMG" --version | tee v.out
                      grep -q '^FreeCAD 26\.3\.' v.out ;;
-            prusaslicer) docker run --rm --entrypoint prusa-slicer "$IMG" --help > v.out
+            # The slicers' versions come from the Dockerfile, which flathub-bump
+            # moves: a literal here would fail the first update after merge.
+            prusaslicer) V=$(sed -n 's/^ARG PRUSASLICER_VERSION=//p' Dockerfile | sort -u)
+                     docker run --rm --entrypoint prusa-slicer "$IMG" --help > v.out
                      head -n 1 v.out
-                     grep -q '^PrusaSlicer-2\.9\.7+' v.out ;;
-            orcaslicer) docker run --rm --entrypoint orca-slicer "$IMG" --help > v.out
+                     [[ "$(head -n 1 v.out)" == "PrusaSlicer-${V}+"* ]] ;;
+            orcaslicer) V=$(sed -n 's/^ARG ORCASLICER_VERSION=//p' Dockerfile | sort -u)
+                     docker run --rm --entrypoint orca-slicer "$IMG" --help > v.out
                      head -n 1 v.out
-                     grep -q '^OrcaSlicer-2\.5\.0:' v.out ;;
+                     [[ "$(head -n 1 v.out)" == "OrcaSlicer-${V}:"* ]] ;;
           esac
           docker run --rm "$IMG" --help | grep -q 'gpu-batch-run'
 
