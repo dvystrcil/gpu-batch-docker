@@ -24,10 +24,11 @@ MOCK = os.environ.get("MOCK_URL", "http://moonraker-mock:7125")
 TOOLS = ("freecad", "prusaslicer", "orcaslicer", "blender")
 CPU_TOOLS = ("freecad", "prusaslicer", "orcaslicer")
 CPU_ONLY = "print guard off: CPU-only job, no GPU in this container"
-# The pinned tool versions (Dockerfile ARGs); a bump changes these too.
+# The pinned tool versions. The slicers' come from the Dockerfile ARGs via
+# bin/compose-test.sh, never a default here: flathub-bump moves those ARGs.
 EXPECT_FREECAD = os.environ.get("EXPECT_FREECAD", "26.3.0")
-EXPECT_PRUSASLICER = os.environ.get("EXPECT_PRUSASLICER", "2.9.7")
-EXPECT_ORCASLICER = os.environ.get("EXPECT_ORCASLICER", "2.5.0")
+EXPECT_PRUSASLICER = os.environ["EXPECT_PRUSASLICER"]
+EXPECT_ORCASLICER = os.environ["EXPECT_ORCASLICER"]
 
 # Per case: the mock's starting state, blender's extra env, what each tool
 # must end as, what blender's reason must contain, and the guard probes the

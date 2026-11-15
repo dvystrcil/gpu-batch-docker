@@ -24,6 +24,12 @@ export ORCASLICER_IMAGE=${ORCASLICER_IMAGE:-gpu-batch-orcaslicer:local}
 export BLENDER_IMAGE=${BLENDER_IMAGE:-gpu-batch-blender:local}
 export RUNNER_IMAGE=${RUNNER_IMAGE:-gpu-batch-runner:local}
 export HARNESS_TAG=${HARNESS_TAG:-local-$$}
+# The slicer versions the asserts expect come from the Dockerfile ARGs, the pins
+# flathub-bump moves. A literal anywhere in the harness failed the first bump (PR #28).
+dockerfile_arg() { sed -n "s/^ARG $1=//p" Dockerfile | head -n 1; }
+export EXPECT_ORCASLICER=${EXPECT_ORCASLICER:-$(dockerfile_arg ORCASLICER_VERSION)}
+export EXPECT_PRUSASLICER=${EXPECT_PRUSASLICER:-$(dockerfile_arg PRUSASLICER_VERSION)}
+[ -n "$EXPECT_ORCASLICER" ] && [ -n "$EXPECT_PRUSASLICER" ] || { echo "no slicer version ARG in the Dockerfile" >&2; exit 1; }
 mapfile -t ALL < <(python3 -c 'import sys; sys.path.insert(0, "tests/compose"); from check import CASES; print("\n".join(CASES))')
 CASES_RUN=("$@")
 [ ${#CASES_RUN[@]} -gt 0 ] || CASES_RUN=("${ALL[@]}")
