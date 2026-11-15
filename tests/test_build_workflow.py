@@ -65,7 +65,21 @@ def test_no_slicer_version_is_hardcoded_in_the_compose_harness():
             assert version not in text, (f, arg)
         assert f"dockerfile_arg {arg}" in harness["bin/compose-test.sh"], arg
         assert f"${{{env}:?" in harness["tests/compose/compose.yaml"], env
-        assert f'os.environ["{env}"]' in harness["tests/compose/check.py"], env
+        assert f'os.environ.get("{env}")' in harness["tests/compose/check.py"], env   # no default
+
+
+def test_the_harness_imports_without_the_versions_but_refuses_to_assert():
+    # seed.py and --print-starter import check.py and never get EXPECT_* (PR #29's
+    # first push made them required at import and every case's seed died).
+    import os, subprocess, sys
+    env = {k: v for k, v in os.environ.items() if not k.startswith("EXPECT_")}
+    compose = ROOT / "tests/compose"
+    r = subprocess.run([sys.executable, "-c", "import check; print(len(check.CASES))"],
+                       cwd=compose, env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and int(r.stdout) > 0, r.stderr
+    r = subprocess.run([sys.executable, "-c", "import check, sys; sys.exit(check.run_assert('chain'))"],
+                       cwd=compose, env=env, capture_output=True, text=True)
+    assert r.returncode == 1 and "EXPECT_PRUSASLICER, EXPECT_ORCASLICER unset" in r.stdout, r.stdout + r.stderr
 
 
 def _stage(name: str) -> str:
