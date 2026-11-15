@@ -125,8 +125,8 @@ services:
     command: [python3, /harness/check.py, "${CASE}"]
     environment:
       EXPECT_FREECAD: ${EXPECT_FREECAD:-26.3.0}
-      EXPECT_PRUSASLICER: ${EXPECT_PRUSASLICER:-2.9.7}
-      EXPECT_ORCASLICER: ${EXPECT_ORCASLICER:-2.5.0}
+      EXPECT_PRUSASLICER: ${EXPECT_PRUSASLICER:?set by bin/compose-test.sh from the Dockerfile}
+      EXPECT_ORCASLICER: ${EXPECT_ORCASLICER:?set by bin/compose-test.sh from the Dockerfile}
     depends_on:
       prusaslicer: {condition: service_completed_successfully}
       orcaslicer: {condition: service_completed_successfully}
