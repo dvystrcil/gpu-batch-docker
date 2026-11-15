@@ -248,8 +248,8 @@ USER 1000:1000
 # prusaslicer-fetch: install with flatpak, pin both ostree commits, copy files.
 FROM ubuntu:26.04 AS orcaslicer-fetch
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-ARG ORCASLICER_VERSION=2.5.0
-ARG ORCASLICER_COMMIT=e6c923c16c51c60d015167c442e4b1f387ce75e07f6e6dce19c8c3b124dd167c
+ARG ORCASLICER_VERSION=2.5.1
+ARG ORCASLICER_COMMIT=edc269f43f06c1a0a63abb1f61d2d28e69316f895722121288153296430f6c01
 ARG GNOME_RUNTIME=50
 ARG GNOME_RUNTIME_COMMIT=4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067
 RUN apt-get update \
@@ -307,7 +307,7 @@ RUN set -eux; \
       > /usr/local/bin/orca-datadir; \
     chmod 755 /usr/local/bin/orca-slicer /usr/local/bin/orca-datadir
 
-ARG ORCASLICER_VERSION=2.5.0
+ARG ORCASLICER_VERSION=2.5.1
 ENV ORCASLICER_VERSION=${ORCASLICER_VERSION}
 
 # Our files last: changing them never invalidates the downloads above.
