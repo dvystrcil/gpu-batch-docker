@@ -88,25 +88,23 @@ jobs:
           username: ${{ env.HB_USERNAME }}
           password: ${{ env.HB_PASSWORD }}
 
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-        with:
-          buildkitd-config-inline: |
-            [registry."harbor-core.harbor.svc.cluster.local"]
-              ca=["/etc/ssl/certs/ca-certificates.crt"]
-
-      # --load puts each image in the sidecar's daemon for compose. The runner
-      # stage has no cache ref of its own: every tool image's mode=max cache holds
-      # its layers. A cache write that fails is a slower next run, not a red CI.
+      # The plain docker driver builds straight into the sidecar's daemon, so no
+      # image passes through this container. Not setup-buildx: its builder needs
+      # --load, which streams each image through the buildx client, and on the
+      # 512Mi runner container that OOM-killed the job on freecad (PR #27).
+      # Read-only cache: the docker driver can't export it; the build job writes
+      # it. The runner stage has no cache ref of its own: every tool image's
+      # mode=max cache holds its layers. A cache that can't be read is a slower
+      # build, not a red CI.
       - name: Build the images
         run: |
           set -euo pipefail
           cache() { echo "type=registry,ref=${INTERNAL_REGISTRY}/${PROJECT}/gpu-batch-$1:buildcache"; }
           for t in runner freecad prusaslicer orcaslicer blender; do
             if [ "$t" = runner ]; then
-              docker buildx build --load --target runner -t gpu-batch-runner:ci --cache-from "$(cache blender)" .
+              docker buildx build --builder default --target runner -t gpu-batch-runner:ci --cache-from "$(cache blender)" .
             else
-              docker buildx build --load --target "$t" -t "gpu-batch-$t:ci" \
-                --cache-from "$(cache "$t")" --cache-to "$(cache "$t"),mode=max,ignore-error=true" .
+              docker buildx build --builder default --target "$t" -t "gpu-batch-$t:ci" --cache-from "$(cache "$t")" .
             fi
           done
 
