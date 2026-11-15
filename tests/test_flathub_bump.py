@@ -7,6 +7,9 @@ file), and the result opens a PR that waits for a human: a new slicer can
 change G-code even when the harness passes.
 
 Fixtures are real `flatpak remote-info` output (2026-11-14: OrcaSlicer 2.5.1).
+The scenarios run on a frozen copy of the four files (fixtures/flathub/repo-orca-2.5.0),
+never the live ones: a bump changes the live pins, and when these tests read them the
+first real bump (PR #28, 2.5.0 -> 2.5.1) failed three of them.
 """
 import json
 import pathlib
@@ -20,6 +23,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIX = ROOT / "tests/fixtures/flathub"
 SCRIPT = ROOT / "bin/flathub-bump.py"
+SNAPSHOT = FIX / "repo-orca-2.5.0"
 FILES = ["Dockerfile", "sources.json", "README.md", "docs/using-the-batch-tools.md"]
 
 OLD_ORCA = "e6c923c16c51c60d015167c442e4b1f387ce75e07f6e6dce19c8c3b124dd167c"
@@ -29,6 +33,14 @@ RUNTIME = "4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067"
 
 @pytest.fixture
 def repo(tmp_path):
+    for f in FILES:
+        (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(SNAPSHOT / f, tmp_path / f)
+    return tmp_path
+
+
+@pytest.fixture
+def live_repo(tmp_path):
     for f in FILES:
         (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / f, tmp_path / f)
@@ -135,6 +147,29 @@ def test_prusaslicer_uses_its_own_tag_format(repo):
     assert prusa["recipe"].endswith("/com.prusa3d.PrusaSlicer/archive/0123abcd4567.tar.gz")
     orca = json.loads((repo / "sources.json").read_text())["images"]["orcaslicer"][0]
     assert orca["version"] == "2.5.0"  # the other slicer is untouched
+
+
+@pytest.mark.parametrize("tool, app_id, prefix, manifest", [
+    ("orcaslicer", "com.orcaslicer.OrcaSlicer", "ORCASLICER", None),
+    ("prusaslicer", "com.prusa3d.PrusaSlicer", "PRUSASLICER", "(0123abcd4567)"),
+])
+def test_the_live_files_are_up_to_date_with_their_own_pins(live_repo, tool, app_id, prefix, manifest):
+    # Whatever the live pins are after any number of bumps, Flathub reporting exactly
+    # them must read as UP-TO-DATE and change nothing. This keeps the script honest
+    # about the live files' format, which the frozen snapshot can't.
+    docker = (ROOT / "Dockerfile").read_text()
+    version = re.search(rf"^ARG {prefix}_VERSION=(\S+)$", docker, re.M).group(1)
+    commit = re.search(rf"^ARG {prefix}_COMMIT=(\S+)$", docker, re.M).group(1)
+    runtime = re.search(r"^ARG GNOME_RUNTIME_COMMIT=(\S+)$", docker, re.M).group(1)
+    app = (FIX / "orca-2.5.1.txt").read_text().replace("com.orcaslicer.OrcaSlicer", app_id)
+    app = app.replace(NEW_ORCA, commit).replace("2.5.1", version)
+    if manifest:
+        app = app.replace("(34e915f92bf7)", manifest)
+    (live_repo / "app.txt").write_text(app)
+    before = _snapshot(live_repo)
+    r = bump(live_repo, tool, live_repo / "app.txt", gnome(**{RUNTIME: runtime}))
+    assert r.returncode == 0 and r.stdout.strip() == f"UP-TO-DATE {tool} {version}", r.stderr
+    assert _snapshot(live_repo) == before
 
 
 WORKFLOW = (ROOT / ".github/workflows/flathub-bump.yaml").read_text()

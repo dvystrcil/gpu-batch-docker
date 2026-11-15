@@ -24,10 +24,13 @@ MOCK = os.environ.get("MOCK_URL", "http://moonraker-mock:7125")
 TOOLS = ("freecad", "prusaslicer", "orcaslicer", "blender")
 CPU_TOOLS = ("freecad", "prusaslicer", "orcaslicer")
 CPU_ONLY = "print guard off: CPU-only job, no GPU in this container"
-# The pinned tool versions (Dockerfile ARGs); a bump changes these too.
+# The pinned tool versions. The slicers' come from the Dockerfile ARGs via
+# bin/compose-test.sh, never a default here: flathub-bump moves those ARGs.
 EXPECT_FREECAD = os.environ.get("EXPECT_FREECAD", "26.3.0")
-EXPECT_PRUSASLICER = os.environ.get("EXPECT_PRUSASLICER", "2.9.7")
-EXPECT_ORCASLICER = os.environ.get("EXPECT_ORCASLICER", "2.5.0")
+# Read here, required only by run_assert: seed.py and --print-starter import
+# this module too and never see them.
+EXPECT_PRUSASLICER = os.environ.get("EXPECT_PRUSASLICER")
+EXPECT_ORCASLICER = os.environ.get("EXPECT_ORCASLICER")
 
 # Per case: the mock's starting state, blender's extra env, what each tool
 # must end as, what blender's reason must contain, and the guard probes the
@@ -173,6 +176,12 @@ def check_tool(c: Checker, tool: str, want_state: str, want_reason: list[str]):
 
 
 def run_assert(case: str) -> int:
+    missing = [k for k, v in (("EXPECT_PRUSASLICER", EXPECT_PRUSASLICER),
+                              ("EXPECT_ORCASLICER", EXPECT_ORCASLICER)) if not v]
+    if missing:
+        print(f"COMPOSE-TEST-FAILED {case}: {', '.join(missing)} unset; run bin/compose-test.sh,"
+              " which reads them from the Dockerfile")
+        return 1
     c = Checker()
     spec = CASES[case]
     c.ok((WORK / "_case").read_text() == case if (WORK / "_case").exists() else False,

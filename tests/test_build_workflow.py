@@ -53,6 +53,35 @@ def test_no_slicer_version_is_hardcoded_in_the_build_checks():
         assert f"s/^ARG {arg}=//p" in BUILD, arg
 
 
+def test_no_slicer_version_is_hardcoded_in_the_compose_harness():
+    # The same leak in the harness failed PR #28 (OrcaSlicer 2.5.1): check.py and
+    # compose.yaml defaulted EXPECT_ORCASLICER to 2.5.0. bin/compose-test.sh reads
+    # each version from the Dockerfile ARG; nothing downstream may supply its own.
+    harness = {f: (ROOT / f).read_text() for f in
+               ("tests/compose/check.py", "tests/compose/compose.yaml", "bin/compose-test.sh")}
+    for arg, env in (("ORCASLICER_VERSION", "EXPECT_ORCASLICER"), ("PRUSASLICER_VERSION", "EXPECT_PRUSASLICER")):
+        version = re.search(rf"^ARG {arg}=(\S+)$", DOCKERFILE, re.M).group(1)
+        for f, text in harness.items():
+            assert version not in text, (f, arg)
+        assert f"dockerfile_arg {arg}" in harness["bin/compose-test.sh"], arg
+        assert f"${{{env}:?" in harness["tests/compose/compose.yaml"], env
+        assert f'os.environ.get("{env}")' in harness["tests/compose/check.py"], env   # no default
+
+
+def test_the_harness_imports_without_the_versions_but_refuses_to_assert():
+    # seed.py and --print-starter import check.py and never get EXPECT_* (PR #29's
+    # first push made them required at import and every case's seed died).
+    import os, subprocess, sys
+    env = {k: v for k, v in os.environ.items() if not k.startswith("EXPECT_")}
+    compose = ROOT / "tests/compose"
+    r = subprocess.run([sys.executable, "-c", "import check; print(len(check.CASES))"],
+                       cwd=compose, env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and int(r.stdout) > 0, r.stderr
+    r = subprocess.run([sys.executable, "-c", "import check, sys; sys.exit(check.run_assert('chain'))"],
+                       cwd=compose, env=env, capture_output=True, text=True)
+    assert r.returncode == 1 and "EXPECT_PRUSASLICER, EXPECT_ORCASLICER unset" in r.stdout, r.stdout + r.stderr
+
+
 def _stage(name: str) -> str:
     m = re.search(rf"^FROM (\S+) AS {name}\n(.*?)(?=^FROM |\Z)", DOCKERFILE, re.M | re.S)
     assert m, name
