@@ -1,33 +1,36 @@
 # GPU batch lane images (homelab#1935).
 #
-#   runner   ubuntu:26.04 + the gpu_batch runner (stdlib Python) + psql.
-#            The base for every GPU batch workload. Not published on its own
+#   base     ubuntu:26.04 + python3 + psql: what every image starts from.
+#   runner   base + the gpu_batch runner (stdlib Python). Not published on its own
 #            until a second workload needs it.
-#   blender  runner + Blender, published as harbor.sirddail.net/ai/gpu-batch-blender.
-#   freecad  runner + FreeCAD (freecadcmd, Fasteners, xvfb-run), published as
+#   blender  base + Blender + the runner, published as harbor.sirddail.net/ai/gpu-batch-blender.
+#   freecad  base + FreeCAD (freecadcmd, Fasteners, xvfb-run), published as
 #            harbor.sirddail.net/ai/gpu-batch-freecad. CPU-only.
-#   prusaslicer  runner + PrusaSlicer (Flathub build, run without flatpak),
+#   prusaslicer  base + PrusaSlicer (Flathub build, run without flatpak),
 #            published as harbor.sirddail.net/ai/gpu-batch-prusaslicer. CPU-only.
-#   orcaslicer  runner + OrcaSlicer (Flathub build, run without flatpak),
+#   orcaslicer  base + OrcaSlicer (Flathub build, run without flatpak),
 #            published as harbor.sirddail.net/ai/gpu-batch-orcaslicer. CPU-only.
 #
-# A new workload (ffmpeg, PyTorch, ...) is another `FROM runner AS <x>` stage
+# A new workload (ffmpeg, PyTorch, ...) is another `FROM base AS <x>` stage, ending
+# with the same three COPY lines as the others,
 # plus a build step, not a new repo.
 
-FROM ubuntu:26.04 AS runner
+# Layer order is for the cache (gpu-batch-docker#27). `base` holds only Ubuntu
+# packages, and every tool stage does its big downloads on top of it. Our own
+# files (the runner code, LICENSE, sources.json) are copied LAST in each image,
+# so a code change or a flathub-bump (which edits sources.json) rebuilds a few
+# small layers, never Blender, FreeCAD or the Flathub apps. Never COPY a repo
+# file into `base`: it would invalidate every download below it.
+FROM ubuntu:26.04 AS base
 
 # psql: the guard's Obico tie-breaker (read-only role, column-level grant).
 # ca-certificates: the in-cluster API read of that role's Secret.
+# /licenses: each tool stage links its licence texts in here
+# (docs/using-the-batch-tools.md, gap 2); Ubuntu's own are /usr/share/doc/*/copyright.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-
-COPY src/gpu_batch /opt/gpu-batch/gpu_batch
-# Licences and sources travel with every image (docs/using-the-batch-tools.md, gap 2):
-# /licenses holds each tool's licence texts, and sources.json says where the
-# exact source of every pinned binary is. Ubuntu's own are /usr/share/doc/*/copyright.
-COPY LICENSE /licenses/gpu-batch-docker/LICENSE
-COPY sources.json /licenses/sources.json
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /licenses
 # Our own title/description/version: the ubuntu base's labels would otherwise
 # describe these images as "The Ubuntu container image maintained by Canonical".
 LABEL org.opencontainers.image.source="https://github.com/dvystrcil/gpu-batch-docker" \
@@ -40,12 +43,18 @@ ENV PYTHONPATH=/opt/gpu-batch \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# uid 1000 matches the laptop user that writes job dirs onto the NFS share.
-USER 1000:1000
 ENTRYPOINT ["python3", "-m", "gpu_batch.runner"]
 
 
-FROM runner AS blender
+FROM base AS runner
+COPY src/gpu_batch /opt/gpu-batch/gpu_batch
+COPY LICENSE /licenses/gpu-batch-docker/LICENSE
+COPY sources.json /licenses/sources.json
+# uid 1000 matches the laptop user that writes job dirs onto the NFS share.
+USER 1000:1000
+
+
+FROM base AS blender
 
 USER root
 # X/GL runtime libs Blender links against even in background mode. This is
@@ -81,10 +90,14 @@ LABEL org.opencontainers.image.title="gpu-batch-blender" \
       org.opencontainers.image.description="Blender (official build) for headless Cycles renders, under the gpu-batch runner. Licences: /licenses" \
       org.opencontainers.image.licenses="MIT AND GPL-3.0-or-later"
 
+# Our files last: changing them never invalidates the downloads above.
+COPY src/gpu_batch /opt/gpu-batch/gpu_batch
+COPY LICENSE /licenses/gpu-batch-docker/LICENSE
+COPY sources.json /licenses/sources.json
 USER 1000:1000
 
 
-FROM runner AS freecad
+FROM base AS freecad
 
 # FreeCAD headless (freecadcmd) for the vt350 CAD checks (clashlib, the
 # toolhead sweep, derive_stls) with the Fasteners workbench, plus xvfb-run
@@ -147,6 +160,10 @@ LABEL org.opencontainers.image.title="gpu-batch-freecad" \
       org.opencontainers.image.description="FreeCAD (official AppImage) + Fasteners workbench for headless CAD jobs, under the gpu-batch runner. Licences: /licenses" \
       org.opencontainers.image.licenses="MIT AND LGPL-2.1-or-later"
 
+# Our files last: changing them never invalidates the downloads above.
+COPY src/gpu_batch /opt/gpu-batch/gpu_batch
+COPY LICENSE /licenses/gpu-batch-docker/LICENSE
+COPY sources.json /licenses/sources.json
 USER 1000:1000
 
 
@@ -190,7 +207,7 @@ RUN set -eux; \
     test -d /out/app/share/licenses
 
 
-FROM runner AS prusaslicer
+FROM base AS prusaslicer
 
 # CPU-only: runs on max-01 with GPU_BATCH_PRINT_GUARD=off (no GPU visible).
 # The binary runs on the runtime's own loader and libs, never Ubuntu's.
@@ -215,6 +232,10 @@ RUN set -eux; \
 ARG PRUSASLICER_VERSION=2.9.7
 ENV PRUSASLICER_VERSION=${PRUSASLICER_VERSION}
 
+# Our files last: changing them never invalidates the downloads above.
+COPY src/gpu_batch /opt/gpu-batch/gpu_batch
+COPY LICENSE /licenses/gpu-batch-docker/LICENSE
+COPY sources.json /licenses/sources.json
 USER 1000:1000
 
 
@@ -253,7 +274,7 @@ RUN set -eux; \
     test -d /out/app/share/licenses
 
 
-FROM runner AS orcaslicer
+FROM base AS orcaslicer
 
 # CPU-only: runs on max-01 with GPU_BATCH_PRINT_GUARD=off (no GPU visible).
 # Flathub's Orca is an FHS build: its resources path is compiled in as
@@ -289,4 +310,8 @@ RUN set -eux; \
 ARG ORCASLICER_VERSION=2.5.0
 ENV ORCASLICER_VERSION=${ORCASLICER_VERSION}
 
+# Our files last: changing them never invalidates the downloads above.
+COPY src/gpu_batch /opt/gpu-batch/gpu_batch
+COPY LICENSE /licenses/gpu-batch-docker/LICENSE
+COPY sources.json /licenses/sources.json
 USER 1000:1000

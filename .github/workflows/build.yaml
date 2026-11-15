@@ -20,6 +20,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same PR cancels its stale run: otherwise the stale run
+# holds the runner and main's build queues behind it (seen on #27). A run on
+# main is never cancelled, because each one cuts a release.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   INTERNAL_REGISTRY: harbor-core.harbor.svc.cluster.local
   PROJECT: ai

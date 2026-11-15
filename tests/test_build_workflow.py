@@ -40,3 +40,33 @@ def test_no_slicer_version_is_hardcoded_in_the_build_checks():
         version = re.search(rf"^ARG {arg}=(\S+)$", DOCKERFILE, re.M).group(1)
         assert version not in BUILD and version.replace(".", r"\.") not in BUILD, arg
         assert f"s/^ARG {arg}=//p" in BUILD, arg
+
+
+def _stage(name: str) -> str:
+    m = re.search(rf"^FROM (\S+) AS {name}\n(.*?)(?=^FROM |\Z)", DOCKERFILE, re.M | re.S)
+    assert m, name
+    return m.group(1), m.group(2)
+
+
+OURS = ("COPY src/gpu_batch", "COPY LICENSE", "COPY sources.json")
+
+
+def test_base_holds_no_repo_file():
+    # Anything COPYed into base invalidates every download in every image built on it.
+    _, base = _stage("base")
+    assert not re.search(r"^COPY (?!--from)", base, re.M)
+
+
+def test_our_files_come_after_every_download():
+    # A code change or a flathub-bump (sources.json) must rebuild only the last layers.
+    for tool in ("blender", "freecad", "prusaslicer", "orcaslicer"):
+        parent, body = _stage(tool)
+        assert parent == "base", f"{tool} builds FROM {parent}: our files would sit under its downloads"
+        first_ours = min(body.index(c) for c in OURS)
+        heavy = [m.start() for m in re.finditer(r"^(RUN |COPY --from=)", body, re.M)]
+        assert heavy and max(heavy) < first_ours, f"{tool}: a download layer comes after our files"
+
+
+def test_a_newer_push_cancels_a_stale_pr_run_but_never_main():
+    assert re.search(r"^concurrency:\n  group: build-\$\{\{ github\.ref \}\}\n"
+                     r"  cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}$", BUILD, re.M)
