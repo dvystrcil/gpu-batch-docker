@@ -1,0 +1,19 @@
+
+OrcaSlicer - Get even more perfect prints!
+
+        ID: com.orcaslicer.OrcaSlicer
+       Ref: app/com.orcaslicer.OrcaSlicer/x86_64/stable
+      Arch: x86_64
+    Branch: stable
+   Version: 2.5.1
+   License: AGPL-3.0-only
+Collection: org.flathub.Stable
+  Download: 251.8 MB
+ Installed: 630.0 MB
+   Runtime: org.gnome.Platform/x86_64/50
+       Sdk: org.gnome.Sdk/x86_64/50
+
+    Commit: edc269f43f06c1a0a63abb1f61d2d28e69316f895722121288153296430f6c01
+    Parent: e6c923c16c51c60d015167c442e4b1f387ce75e07f6e6dce19c8c3b124dd167c
+   Subject: Merge pull request #15 from HanifKoh/release/v2.5.1 (34e915f92bf7)
+      Date: 2026-11-14 13:50:57 +0000

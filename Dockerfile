@@ -23,6 +23,19 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src/gpu_batch /opt/gpu-batch/gpu_batch
+# Licences and sources travel with every image (docs/using-the-batch-tools.md, gap 2):
+# /licenses holds each tool's licence texts, and sources.json says where the
+# exact source of every pinned binary is. Ubuntu's own are /usr/share/doc/*/copyright.
+COPY LICENSE /licenses/gpu-batch-docker/LICENSE
+COPY sources.json /licenses/sources.json
+# Our own title/description/version: the ubuntu base's labels would otherwise
+# describe these images as "The Ubuntu container image maintained by Canonical".
+LABEL org.opencontainers.image.source="https://github.com/dvystrcil/gpu-batch-docker" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.title="gpu-batch-runner" \
+      org.opencontainers.image.description="The gpu-batch runner: runs a job's steps, proves its outputs, reports status.json" \
+      org.opencontainers.image.version="" \
+      org.opencontainers.image.vendor=""
 ENV PYTHONPATH=/opt/gpu-batch \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -55,6 +68,8 @@ RUN set -eux; \
     mkdir -p /opt/blender; \
     tar -xJf /tmp/blender.tar.xz -C /opt/blender --strip-components=1; \
     rm /tmp/blender.tar.xz; \
+    test -s /opt/blender/license/license.md; \
+    ln -s /opt/blender/license /licenses/blender; \
     ln -s /opt/blender/blender /usr/local/bin/blender; \
     apt-get purge -y curl xz-utils && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
@@ -62,6 +77,9 @@ RUN set -eux; \
 # no runtimeClassName: verified on node-03.
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     BLENDER_VERSION=${BLENDER_VERSION}
+LABEL org.opencontainers.image.title="gpu-batch-blender" \
+      org.opencontainers.image.description="Blender (official build) for headless Cycles renders, under the gpu-batch runner. Licences: /licenses" \
+      org.opencontainers.image.licenses="MIT AND GPL-3.0-or-later"
 
 USER 1000:1000
 
@@ -96,6 +114,8 @@ RUN set -eux; \
     /tmp/FreeCAD.AppImage --appimage-extract >/dev/null; \
     mv /tmp/squashfs-root /opt/freecad; \
     chmod -R go+rX /opt/freecad; \
+    test -d /opt/freecad/usr/share/licenses; test -s /opt/freecad/packages.txt; \
+    ln -s /opt/freecad/usr/share/licenses /licenses/freecad; \
     rm /tmp/FreeCAD.AppImage; \
     printf '#!/bin/sh\nexec /opt/freecad/AppRun freecadcmd "$@"\n' > /usr/local/bin/freecadcmd; \
     printf '#!/bin/sh\nexec /opt/freecad/AppRun freecad "$@"\n' > /usr/local/bin/freecad; \
@@ -113,6 +133,8 @@ RUN set -eux; \
     git -C "$d" checkout -q FETCH_HEAD; \
     test "$(git -C "$d" rev-parse HEAD)" = "${FASTENERS_COMMIT}"; \
     rm -rf "$d/.git"; \
+    test -s "$d/LICENSE"; \
+    mkdir -p /licenses/fasteners-workbench; ln -s "$d/LICENSE" /licenses/fasteners-workbench/LICENSE; \
     apt-get purge -y curl git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # FREECAD_APPIMAGE / FREECADCMD are what vt350's clashlib and sweep read, so
@@ -121,6 +143,9 @@ ENV FREECAD_APPIMAGE=/opt/freecad/AppRun \
     FREECADCMD=/usr/local/bin/freecadcmd \
     FREECAD_VERSION=${FREECAD_VERSION} \
     FASTENERS_REF=${FASTENERS_REF}
+LABEL org.opencontainers.image.title="gpu-batch-freecad" \
+      org.opencontainers.image.description="FreeCAD (official AppImage) + Fasteners workbench for headless CAD jobs, under the gpu-batch runner. Licences: /licenses" \
+      org.opencontainers.image.licenses="MIT AND LGPL-2.1-or-later"
 
 USER 1000:1000
 
@@ -159,7 +184,10 @@ RUN set -eux; \
     flatpak info --system "$app" | grep -qE "^ *Runtime: org.gnome.Platform/x86_64/${GNOME_RUNTIME}$"; \
     mkdir -p /out/runtime; \
     cp -a "$(flatpak info --system --show-location "$app")/files" /out/app; \
-    cp -a "$(flatpak info --system --show-location "$rt")/files/lib" /out/runtime/lib
+    cp -a "$(flatpak info --system --show-location "$rt")/files/lib" /out/runtime/lib; \
+    test -d "$(flatpak info --system --show-location "$rt")/files/share/licenses"; \
+    cp -a "$(flatpak info --system --show-location "$rt")/files/share/licenses" /out/runtime-licenses; \
+    test -d /out/app/share/licenses
 
 
 FROM runner AS prusaslicer
@@ -173,6 +201,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=prusaslicer-fetch /out/app /opt/prusaslicer/app
 COPY --from=prusaslicer-fetch /out/runtime /opt/prusaslicer/runtime
+COPY --from=prusaslicer-fetch /out/runtime-licenses /licenses/gnome-runtime
+RUN ln -s /opt/prusaslicer/app/share/licenses /licenses/prusaslicer
+LABEL org.opencontainers.image.title="gpu-batch-prusaslicer" \
+      org.opencontainers.image.description="PrusaSlicer (Flathub build) for headless slicing, under the gpu-batch runner. Licences: /licenses" \
+      org.opencontainers.image.licenses="MIT AND AGPL-3.0-only"
 RUN set -eux; \
     rtlib=/opt/prusaslicer/runtime/lib/x86_64-linux-gnu; \
     printf '#!/bin/sh\nexec %s/ld-linux-x86-64.so.2 --library-path /opt/prusaslicer/app/lib:%s /opt/prusaslicer/app/bin/prusa-slicer "$@"\n' "$rtlib" "$rtlib" \
@@ -214,7 +247,10 @@ RUN set -eux; \
     flatpak info --system "$app" | grep -qE "^ *Runtime: org.gnome.Platform/x86_64/${GNOME_RUNTIME}$"; \
     mkdir -p /out/runtime; \
     cp -a "$(flatpak info --system --show-location "$app")/files" /out/app; \
-    cp -a "$(flatpak info --system --show-location "$rt")/files/lib" /out/runtime/lib
+    cp -a "$(flatpak info --system --show-location "$rt")/files/lib" /out/runtime/lib; \
+    test -d "$(flatpak info --system --show-location "$rt")/files/share/licenses"; \
+    cp -a "$(flatpak info --system --show-location "$rt")/files/share/licenses" /out/runtime-licenses; \
+    test -d /out/app/share/licenses
 
 
 FROM runner AS orcaslicer
@@ -237,6 +273,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=orcaslicer-fetch /out/app /app
 COPY --from=orcaslicer-fetch /out/runtime /opt/orcaslicer/runtime
+COPY --from=orcaslicer-fetch /out/runtime-licenses /licenses/gnome-runtime
+RUN ln -s /app/share/licenses /licenses/orcaslicer
+LABEL org.opencontainers.image.title="gpu-batch-orcaslicer" \
+      org.opencontainers.image.description="OrcaSlicer (Flathub build) for headless slicing, under the gpu-batch runner. Licences: /licenses" \
+      org.opencontainers.image.licenses="MIT AND AGPL-3.0-only"
 RUN set -eux; \
     rtlib=/opt/orcaslicer/runtime/lib/x86_64-linux-gnu; \
     printf '#!/bin/sh\nexport LC_NUMERIC=C\nexec %s/ld-linux-x86-64.so.2 --library-path /app/lib:%s /app/bin/orca-slicer "$@"\n' "$rtlib" "$rtlib" \

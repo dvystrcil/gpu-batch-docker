@@ -1,0 +1,141 @@
+# Keep the Flathub-built slicers current (docs/using-the-batch-tools.md).
+#
+# Renovate can't see Flathub, so this asks it daily. When Flathub has a newer
+# build of a slicer (or of the GNOME runtime both run on), bin/flathub-bump.py
+# moves the pins in the Dockerfile and sources.json, and this opens a PR.
+# The PR WAITS FOR A HUMAN, by the owner's decision (2026-11-14): a new slicer
+# can change the G-code and the time/filament estimates even when the compose
+# harness passes. Nothing here merges. The branch is update/..., not bump/...,
+# so homelab's auto-merge gate (bump/<name>-<semver>) never matches it.
+#
+# The PR is opened with the CICD App's token, not GITHUB_TOKEN: a PR opened
+# with GITHUB_TOKEN triggers no workflows, so build.yaml's harness and the
+# licensing tests would never run on it.
+
+name: flathub-bump
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: gpu-batch-docker-runner
+    strategy:
+      fail-fast: false
+      # One at a time: both slicers share the runtime pin, so two runs could
+      # each open a PR moving it.
+      max-parallel: 1
+      matrix:
+        include:
+          - tool: orcaslicer
+            app: com.orcaslicer.OrcaSlicer
+          - tool: prusaslicer
+            app: com.prusa3d.PrusaSlicer
+    steps:
+      # One named secret per step, never the whole store.
+      - name: Fetch the CICD App client id
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: CICD_APP_CLIENT_ID
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the CICD App private key
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: CICD_APP_PRIVATE_KEY
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        with:
+          client-id: ${{ env.CICD_APP_CLIENT_ID }}
+          private-key: ${{ env.CICD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: gpu-batch-docker
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.14'
+
+      # Docker here is a DinD sidecar, so a bind mount would name the daemon's
+      # filesystem: the answer comes back on stdout, split at a marker line.
+      - name: Ask Flathub for its current build
+        run: |
+          set -euo pipefail
+          BRANCH=$(sed -n 's/^ARG GNOME_RUNTIME=//p' Dockerfile | sort -u)
+          [ "$(printf '%s\n' "$BRANCH" | wc -l)" = 1 ] || { echo "::error::GNOME_RUNTIME differs between stages"; exit 1; }
+          # remote-info's Version line comes from Flathub's appstream data, which a
+          # fresh container doesn't have until --appstream fetches it (seen 2026-11-14).
+          docker run --rm -e DEBIAN_FRONTEND=noninteractive ubuntu:26.04 sh -ec "
+            apt-get update -qq >/dev/null
+            apt-get install -y -qq --no-install-recommends flatpak ca-certificates >/dev/null
+            flatpak remote-add --system flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+            flatpak update --system --appstream flathub >/dev/null
+            flatpak remote-info --system flathub app/${{ matrix.app }}/x86_64/stable
+            echo ----RUNTIME----
+            flatpak remote-info --system flathub runtime/org.gnome.Platform/x86_64/${BRANCH}
+          " > flathub.txt
+          sed '/^----RUNTIME----$/,$d' flathub.txt > app.txt
+          sed '1,/^----RUNTIME----$/d' flathub.txt > runtime.txt
+          cat app.txt runtime.txt
+
+      - name: Move the pins
+        id: bump
+        run: |
+          set -euo pipefail
+          python3 bin/flathub-bump.py ${{ matrix.tool }} --app-info app.txt --runtime-info runtime.txt | tee bump.out
+          echo "result=$(tail -n 1 bump.out)" >> "$GITHUB_OUTPUT"
+
+      - name: Open the PR (it waits for a human)
+        if: startsWith(steps.bump.outputs.result, 'BUMPED ')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RESULT: ${{ steps.bump.outputs.result }}
+          PREFIX: ${{ matrix.tool }}
+        run: |
+          set -euo pipefail
+          NEW=$(awk '{print $5}' <<< "$RESULT")
+          COMMIT=$(sed -n "s/^ARG ${PREFIX^^}_COMMIT=//p" Dockerfile | head -c 12)
+          RT=$(sed -n 's/^ARG GNOME_RUNTIME_COMMIT=//p' Dockerfile | sort -u | head -c 12)
+          BR="update/${PREFIX}-${NEW}-${COMMIT}-rt${RT}"
+          if git ls-remote --exit-code --heads origin "$BR" >/dev/null; then
+            echo "::notice::$BR is already open"; exit 0
+          fi
+          git config user.name "flathub-bump"
+          git config user.email "noreply@sirddail.net"
+          git checkout -b "$BR"
+          git add Dockerfile sources.json README.md docs/using-the-batch-tools.md
+          git commit -qm "build: ${RESULT#BUMPED }"
+          git push -q origin "$BR"
+          gh pr create --head "$BR" --title "build: ${RESULT#BUMPED }" --body "Flathub has a newer build. \`bin/flathub-bump.py\` moved the pins; nothing else changed.
+
+          **This PR waits for a human.** Before merging:
+          - [ ] build.yaml's compose harness is green (it slices with the real presets in the new build)
+          - [ ] the slice's G-code and time/filament estimates still look right against the previous version
+          - [ ] the laptop runs the same Flathub build, so cluster and laptop slices stay comparable
+
+          Flathub's answer:
+          \`\`\`
+          $(cat app.txt)
+          \`\`\`"
