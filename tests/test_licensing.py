@@ -47,11 +47,11 @@ def test_sources_cover_every_published_image():
         assert all(c.get("source") and c.get("license") for c in SOURCES["images"][image]), image
 
 
-def test_the_runner_base_carries_our_licence_and_the_source_record():
-    runner = _stage("runner")
-    assert "COPY LICENSE /licenses/gpu-batch-docker/LICENSE" in runner
-    assert "COPY sources.json /licenses/sources.json" in runner
-    assert 'org.opencontainers.image.source="https://github.com/dvystrcil/gpu-batch-docker"' in runner
+def test_every_image_carries_our_licence_and_the_source_record():
+    assert 'org.opencontainers.image.source="https://github.com/dvystrcil/gpu-batch-docker"' in _stage("base")
+    for image in ["runner", *PUBLISHED]:
+        assert "COPY LICENSE /licenses/gpu-batch-docker/LICENSE" in _stage(image), image
+        assert "COPY sources.json /licenses/sources.json" in _stage(image), image
 
 
 def test_every_published_image_puts_its_tool_licences_in_slash_licenses():
@@ -95,6 +95,6 @@ def test_images_reach_ghcr_only_after_their_sources_are_on_the_release():
 
 def test_no_image_keeps_the_ubuntu_base_description():
     # Seen in a real build: every image inherited "The Ubuntu container image maintained by Canonical".
-    assert "org.opencontainers.image.description=" in _stage("runner")
+    assert "org.opencontainers.image.description=" in _stage("base")
     for image in PUBLISHED:
         assert "org.opencontainers.image.description=" in _stage(image), image
