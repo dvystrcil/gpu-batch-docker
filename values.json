@@ -1,0 +1,11 @@
+{
+  "print_guard": {
+    "moonraker_url": "http://192.168.86.243",
+    "fallback": "obico-db",
+    "obico": {
+      "printer_name": "Neptune",
+      "credentials": "k8s-secret:obico/obico-postgres-gpubatch"
+    },
+    "when_unreachable": "refuse"
+  }
+}

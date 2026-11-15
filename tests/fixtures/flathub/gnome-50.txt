@@ -1,0 +1,17 @@
+
+GNOME Application Platform version 50 - Shared libraries used by GNOME
+applications
+
+        ID: org.gnome.Platform
+       Ref: runtime/org.gnome.Platform/x86_64/50
+      Arch: x86_64
+    Branch: 50
+   License: GPL-2.0+
+Collection: org.flathub.Stable
+  Download: 418.8 MB
+ Installed: 1.1 GB
+
+    Commit: 4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067
+    Parent: d607f3df26df30485d50f07c69f2a4750483cc644625a1eda0f2062c59bd6848
+   Subject: Build of the GNOME Runtime from: 50.6-18-g0ed65ce92
+      Date: 2026-10-28 01:54:42 +0000

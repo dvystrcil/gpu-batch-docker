@@ -82,6 +82,105 @@ jobs:
           docker buildx imagetools inspect \
             ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}
 
+  # Public copies on GHCR (docs/using-the-batch-tools.md, gap 2). Off until the
+  # repo variable PUBLISH_GHCR is 'true'. Sources first: an image is published
+  # only once the exact source of every GPL/LGPL/AGPL binary in it is attached
+  # to this release, as sources.json lists it.
+  mirror-sources:
+    needs: promote
+    if: vars.PUBLISH_GHCR == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download every pinned source archive
+        run: python3 bin/mirror-sources.py --out sources-out
+
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" sources-out/* sources.json --clobber --repo "${{ github.repository }}"
+
+  publish-ghcr:
+    needs: mirror-sources
+    if: vars.PUBLISH_GHCR == 'true'
+    runs-on: gpu-batch-docker-runner
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [gpu-batch-blender, gpu-batch-freecad, gpu-batch-prusaslicer, gpu-batch-orcaslicer]
+    steps:
+      # One named secret per step, never the whole store.
+      - name: Fetch the Harbor username
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: HB_USERNAME
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the Harbor password
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: HB_PASSWORD
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Log in to Harbor
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ${{ env.INTERNAL_REGISTRY }}
+          username: ${{ env.HB_USERNAME }}
+          password: ${{ env.HB_PASSWORD }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."harbor-core.harbor.svc.cluster.local"]
+              ca=["/etc/ssl/certs/ca-certificates.crt"]
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      # The very image promote just tagged in Harbor (no rebuild), so GHCR and
+      # the cluster run the same digest.
+      - name: Copy the release from Harbor to GHCR
+        run: |
+          SRC=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}
+          for TAG in $(jq -cr '[.tags[]] | unique | .[]' <<< "$DOCKER_METADATA_OUTPUT_JSON"); do
+            docker buildx imagetools create -t "$TAG" "$SRC"
+          done
+          docker buildx imagetools inspect "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}"
+
   # The deploy repo's only workload is a suspended CronJob (the Job
   # template). argocd-image-updater cannot see CronJobs (homelab#951), so
   # the bump is a PR opened here, after promote, when the tag is known to

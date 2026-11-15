@@ -25,6 +25,18 @@ reach a GPU, i.e. no /dev/nvidia<N> device and no NVIDIA_VISIBLE_DEVICES
 naming one. A job with no GPU cannot touch the 970's VRAM. A visible GPU
 keeps the guard on, so the switch set on a render (by anyone who can set a
 Job's env) changes nothing.
+
+The values file (docs/using-the-batch-tools.md): GPU_BATCH_VALUES names a JSON
+file whose "print_guard" object points the guard at someone else's printer.
+The keys are moonraker_url (null = no printer), fallback ("obico-db" | "none"),
+obico.printer_name, obico.credentials (a reference: k8s-secret:ns/name,
+file:path or env:VAR, never the login itself), and when_unreachable
+("refuse" | "allow", used only with fallback "none"). values.json at the repo
+root is this homelab's own settings, the same as having no file. The env vars
+MOONRAKER_URL, OBICO_PRINTER_NAME and OBICO_PG_SECRET still win over the file.
+A file that can't be read or says something unknown refuses every job: it
+isn't treated as missing. "No printer to protect" means moonraker_url null
+AND fallback none, both stated explicitly.
 """
 from __future__ import annotations
 
@@ -47,7 +59,7 @@ IDLE = frozenset({"standby", "complete", "cancelled", "error"})
 _NO_ANSWER = frozenset({errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN,
                         errno.ETIMEDOUT})
 
-OVERRIDE_HINT = ("If Neptune is definitely powered off, resubmit with --printer-off "
+OVERRIDE_HINT = ("If {name} is definitely powered off, resubmit with --printer-off "
                  "(accepted only while the printer is unreachable).")
 
 
@@ -72,34 +84,35 @@ class Decision:
 
 # ----------------------------------------------------------------- decision
 
-def decide(printer: PrinterProbe, obico: Callable[[], ObicoState], override: bool) -> Decision:
+def decide(printer: PrinterProbe, obico: Callable[[], ObicoState], override: bool, name: str = "Neptune") -> Decision:
     if printer.kind == "state":
         if printer.state in BUSY:
-            return Decision(False, f"Neptune is {printer.state} (moonraker)"
+            return Decision(False, f"{name} is {printer.state} (moonraker)"
                             + ("; --printer-off override ignored, the printer is reachable" if override else ""))
         if printer.state in IDLE:
-            return Decision(True, f"Neptune is {printer.state} (moonraker)")
+            return Decision(True, f"{name} is {printer.state} (moonraker)")
         return Decision(False, f"moonraker reported unrecognised state {printer.state!r}; failing closed")
 
     if printer.kind != "unreachable":
-        msg = f"Neptune is reachable but its print state is unknown ({printer.detail}); failing closed"
+        msg = f"{name} is reachable but its print state is unknown ({printer.detail}); failing closed"
         if override:
             msg += "; --printer-off override ignored, the printer is reachable"
         return Decision(False, msg)
 
     if override:
-        return Decision(True, f"Neptune unreachable ({printer.detail}); --printer-off override accepted")
+        return Decision(True, f"{name} unreachable ({printer.detail}); --printer-off override accepted")
 
     try:
         ob = obico()
     except Exception as e:  # a tie-breaker that crashes is an unknown, not a pass
         ob = ObicoState("unknown", f"{type(e).__name__}: {e}")
     if ob.kind == "idle":
-        return Decision(True, f"Neptune unreachable ({printer.detail}) and Obico shows no active print")
+        return Decision(True, f"{name} unreachable ({printer.detail}) and Obico shows no active print")
     if ob.kind == "printing":
-        return Decision(False, "Neptune unreachable but Obico still shows an active print "
-                        "(network drop mid-print?). " + OVERRIDE_HINT)
-    return Decision(False, f"Neptune unreachable and Obico print state unknown ({ob.detail}). " + OVERRIDE_HINT)
+        return Decision(False, f"{name} unreachable but Obico still shows an active print "
+                        "(network drop mid-print?). " + OVERRIDE_HINT.format(name=name))
+    return Decision(False, f"{name} unreachable and Obico print state unknown ({ob.detail}). "
+                    + OVERRIDE_HINT.format(name=name))
 
 
 # ---------------------------------------------------------------- moonraker
@@ -215,6 +228,74 @@ def gpu_visible(env, dev_dir: str = "/dev") -> bool:
     return any(n.startswith("nvidia") and n[len("nvidia"):].isdigit() for n in names)
 
 
+FALLBACKS = frozenset({"obico-db", "none"})
+WHEN_UNREACHABLE = frozenset({"refuse", "allow"})
+
+
+class ValuesError(ValueError):
+    """The values file can't be read or says something the guard won't guess at."""
+
+
+def load_values(env) -> dict:
+    """The "print_guard" section of the values file named by GPU_BATCH_VALUES ({} if unset), validated."""
+    path = env.get("GPU_BATCH_VALUES")
+    if not path:
+        return {}
+    try:
+        with open(path) as f:
+            doc = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ValuesError(f"can't read {path}: {type(e).__name__}: {e}") from e
+    if not isinstance(doc, dict) or not isinstance(doc.get("print_guard", {}), dict):
+        raise ValuesError(f"{path}: expected an object with a \"print_guard\" object")
+    pg = doc.get("print_guard", {})
+    url = pg.get("moonraker_url", "")
+    fallback = pg.get("fallback", "obico-db")
+    if url is not None and not isinstance(url, str):
+        raise ValuesError(f"moonraker_url must be a URL string or null, got {url!r}")
+    if fallback not in FALLBACKS:
+        raise ValuesError(f"fallback must be one of {sorted(FALLBACKS)}, got {fallback!r}")
+    if pg.get("when_unreachable", "refuse") not in WHEN_UNREACHABLE:
+        raise ValuesError(f"when_unreachable must be one of {sorted(WHEN_UNREACHABLE)}, "
+                          f"got {pg['when_unreachable']!r}")
+    if url is None and fallback != "none":
+        raise ValuesError("moonraker_url is null but fallback is not none: set both to say there is no printer")
+    ob = pg.get("obico", {})
+    if not isinstance(ob, dict) or not isinstance(ob.get("printer_name", ""), str):
+        raise ValuesError("obico must be an object, and obico.printer_name a string")
+    if "credentials" in ob:
+        _parse_credentials_ref(ob["credentials"])
+    return pg
+
+
+CREDENTIAL_SCHEMES = ("k8s-secret:", "file:", "env:")
+
+
+def _parse_credentials_ref(ref) -> tuple[str, str]:
+    """'k8s-secret:ns/name' | 'file:/path' | 'env:VAR' -> (scheme, target). Never echoes the value back."""
+    if isinstance(ref, str):
+        for scheme in CREDENTIAL_SCHEMES:
+            target = ref[len(scheme):]
+            if ref.startswith(scheme) and target and (scheme != "k8s-secret:" or "/" in target):
+                return scheme[:-1], target
+    raise ValuesError("obico.credentials must be a reference: k8s-secret:<namespace>/<name>, "
+                      "file:<path to a JSON login> or env:<variable holding a JSON login>")
+
+
+def read_credentials(ref: str, env) -> dict:
+    """The Obico database login (host, port, user, password, dbname) from where the reference says."""
+    scheme, target = _parse_credentials_ref(ref)
+    if scheme == "k8s-secret":
+        ns, name = target.split("/", 1)
+        return read_k8s_secret(ns, name)
+    if scheme == "file":
+        with open(target) as f:
+            return json.load(f)
+    if target not in env:
+        raise KeyError(f"{target} is not set")
+    return json.loads(env[target])
+
+
 def from_env(env=os.environ, dev_dir: str = "/dev"):
     """Build the guard the runner calls, configured from the pod env."""
     guard_off = env.get("GPU_BATCH_PRINT_GUARD") == "off"
@@ -222,16 +303,39 @@ def from_env(env=os.environ, dev_dir: str = "/dev"):
         def skipped(override: bool) -> Decision:
             return Decision(True, "print guard off: CPU-only job, no GPU in this container")
         return skipped, lambda: None
-    moonraker = env.get("MOONRAKER_URL", "http://192.168.86.243")
-    printer = env.get("OBICO_PRINTER_NAME", "Neptune")
-    secret = env.get("OBICO_PG_SECRET", "obico/obico-postgres-gpubatch")
+    try:
+        values = load_values(env)
+    except ValuesError as e:
+        why = str(e)
+
+        def broken(override: bool) -> Decision:  # a guard that can't be configured is a closed gate
+            return Decision(False, f"print guard values file is invalid, refusing: {why}")
+        return broken, lambda: None
+    moonraker = env.get("MOONRAKER_URL", values.get("moonraker_url", "http://192.168.86.243"))
+    fallback = values.get("fallback", "obico-db")
+    if moonraker is None and fallback == "none":
+        def no_printer(override: bool) -> Decision:
+            return Decision(True, "print guard: no printer to protect "
+                                  "(values file: moonraker_url null, fallback none)")
+        return no_printer, lambda: None
+    ob = values.get("obico", {})
+    printer = env.get("OBICO_PRINTER_NAME", ob.get("printer_name", "Neptune"))
+    creds_ref = ("k8s-secret:" + env["OBICO_PG_SECRET"] if "OBICO_PG_SECRET" in env
+                 else ob.get("credentials", "k8s-secret:obico/obico-postgres-gpubatch"))
 
     def obico() -> ObicoState:
-        ns, name = secret.split("/", 1)
-        return query_obico(read_k8s_secret(ns, name), printer)
+        return query_obico(read_credentials(creds_ref, env), printer)
+
+    when_unreachable = values.get("when_unreachable", "refuse")
 
     def check(override: bool) -> Decision:
-        d = decide(probe_moonraker(moonraker), obico, override)
+        p = probe_moonraker(moonraker)
+        if fallback == "none" and p.kind == "unreachable" and not override:
+            d = Decision(when_unreachable == "allow",
+                         f"{printer} unreachable ({p.detail}), no fallback configured: "
+                         f"when_unreachable={when_unreachable}")
+        else:
+            d = decide(p, obico, override, printer)
         if guard_off:
             return Decision(d.allow, f"GPU_BATCH_PRINT_GUARD=off ignored: a GPU is visible; {d.reason}")
         return d
@@ -240,6 +344,6 @@ def from_env(env=os.environ, dev_dir: str = "/dev"):
         # Mid-run re-check: moonraker only, and only a definite busy state
         # aborts. An unreachable printer mid-render does not stop the render.
         p = probe_moonraker(moonraker)
-        return f"Neptune started {p.state} during the render" if p.kind == "state" and p.state in BUSY else None
+        return f"{printer} started {p.state} during the render" if p.kind == "state" and p.state in BUSY else None
 
     return check, watch
