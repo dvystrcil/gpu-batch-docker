@@ -122,7 +122,11 @@ jobs:
       - name: Assert the harness completed
         run: test "$(tail -n 1 compose-test.out)" = COMPOSE-TEST-OK
 
-  build:
+  # The matrix that pushes :dev + :sha-<sha>. Not named `build`: a matrix job
+  # reports one check per leg (`build-image (blender, gpu-batch-blender)`), so
+  # the ruleset's required `build` context comes from the gate job below
+  # (homelab#2355).
+  build-image:
     needs: compose-test
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: gpu-batch-docker-runner
@@ -228,11 +232,41 @@ jobs:
           esac
           docker run --rm "$IMG" --help | grep -q 'gpu-batch-run'
 
+  # The required `build` status check (homelab#2355). Before this job existed
+  # the matrix was named `build` and skipped on every PR, and GitHub counts a
+  # skipped required check as passing, so `build` gated nothing. This job runs
+  # on every event (always()) and fails unless:
+  #   - compose-test succeeded (every image built and ran, on PRs too), and
+  #   - build-image succeeded, or on a pull_request was skipped (it pushes to
+  #     Harbor, so it only runs on push to main and dispatch). A skip is only
+  #     accepted on pull_request.
+  # A cancelled, failed or unexpectedly skipped need fails this job.
+  build:
+    needs: [compose-test, build-image]
+    if: always()
+    runs-on: gpu-batch-docker-runner
+    permissions: {}
+    steps:
+      - name: Every needed job passed
+        env:
+          EVENT: ${{ github.event_name }}
+          COMPOSE_TEST: ${{ needs.compose-test.result }}
+          BUILD_IMAGE: ${{ needs.build-image.result }}
+        run: |
+          echo "event=$EVENT compose-test=$COMPOSE_TEST build-image=$BUILD_IMAGE"
+          ok_image='^success$'
+          [ "$EVENT" = pull_request ] && ok_image='^(success|skipped)$'
+          [ "$COMPOSE_TEST" = success ] || { echo "::error::compose-test is $COMPOSE_TEST, want success"; exit 1; }
+          [[ "$BUILD_IMAGE" =~ $ok_image ]] || { echo "::error::build-image is $BUILD_IMAGE on $EVENT, want $ok_image"; exit 1; }
+          echo BUILD-GATE-OK
+
   # One release per push, after EVERY image in the matrix is pushed and
   # verified: a release fires docker-release.yaml, which promotes :dev of
   # each image, so it must not run per matrix leg or before both exist.
+  # Needs build-image, not the `build` gate: the gate succeeds on PRs too,
+  # and a release must only follow a real push.
   release:
-    needs: build
+    needs: build-image
     runs-on: gpu-batch-docker-runner
     permissions:
       contents: read
