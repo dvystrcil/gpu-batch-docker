@@ -30,7 +30,7 @@ def test_compose_test_builds_from_the_shared_harbor_cache():
     assert len(builds) == 2, builds                                    # the runner line and the tool loop
     assert all("--builder default" in b for b in builds), "a build is not on the docker driver"
     assert all("--cache-from" in b for b in builds), "a build reads no cache"
-    assert ":buildcache" in build and ":buildcache" in _job("build")   # the same refs the push job writes
+    assert ":buildcache" in build and ":buildcache" in _job("build-image")   # the same refs the push job writes
     assert "docker build --target" not in job                          # the uncached path is gone
 
 
@@ -110,3 +110,23 @@ def test_our_files_come_after_every_download():
 def test_a_newer_push_cancels_a_stale_pr_run_but_never_main():
     assert re.search(r"^concurrency:\n  group: build-\$\{\{ github\.ref \}\}\n"
                      r"  cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}$", BUILD, re.M)
+
+
+def test_the_required_build_check_is_a_gate_that_runs_on_prs():
+    # homelab#2355: the ruleset requires the bare `build` context. A matrix job
+    # reports `build (<leg>)` per leg, and a skipped job counts as passing, so
+    # `build` is a non-matrix gate that always runs and checks its needs.
+    gate = "\n".join(l for l in _job("build").splitlines() if not l.lstrip().startswith("#"))
+    assert "needs: [compose-test, build-image]" in gate
+    assert "if: always()" in gate
+    assert "strategy:" not in gate and "matrix" not in gate
+    assert "COMPOSE_TEST: ${{ needs.compose-test.result }}" in gate
+    assert "BUILD_IMAGE: ${{ needs.build-image.result }}" in gate
+    assert "'^(success|skipped)$'" in gate and "pull_request" in gate   # skip accepted on PRs only
+    image = _job("build-image")
+    assert "strategy:" in image and "github.event_name == 'push'" in image
+
+
+def test_release_follows_the_pushed_images_not_the_gate():
+    # The gate succeeds on PRs; a release that needed it would cut one per PR.
+    assert "needs: build-image\n" in _job("release")
