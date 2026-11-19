@@ -12,7 +12,7 @@ commands and **proves** the job produced what it promised before it reports succ
 | Image (Dockerfile target) | Tool | What it's for |
 |---|---|---|
 | `freecad` | FreeCAD 26.3rc2 + Fasteners workbench 0.5.64, `xvfb-run` | headless model edits, clash checks, mesh/STL export, also GUI-only scripts under a virtual display |
-| `blender` | Blender 5.2.2 LTS | Cycles renders of exported meshes, on an NVIDIA GPU or the CPU |
+| `blender` | Blender 5.2.4 LTS | Cycles renders of exported meshes, on an NVIDIA GPU or the CPU |
 | `orcaslicer` | OrcaSlicer 2.5.1 | slice STLs with your own presets; print time and filament statistics |
 | `prusaslicer` | PrusaSlicer 2.9.7 | the same, with PrusaSlicer |
 
@@ -57,7 +57,7 @@ Match the image versions, or your results will differ from anyone else's:
 |---|---|---|
 | FreeCAD | 26.3rc2 (AppImage) | freecad.org downloads; set `FREECAD_APPIMAGE` to the AppImage path |
 | Fasteners workbench | V0.5.64-beta (`85a21e22`) | FreeCAD Addon Manager, or clone at that commit into FreeCAD's `Mod/` |
-| Blender | 5.2.2 LTS | blender.org (the official tarball; the snap tracks newer releases) |
+| Blender | 5.2.4 LTS | blender.org (the official tarball; the snap tracks newer releases) |
 | OrcaSlicer | 2.5.1 | Flathub or GitHub releases |
 | PrusaSlicer | 2.9.7 | Flathub or GitHub releases |
 | Python | 3.14 for the runner; numpy for some scripts | your distro |

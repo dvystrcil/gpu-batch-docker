@@ -67,8 +67,8 @@ RUN apt-get update \
 
 # Official tarball, verified against the sha256 blender.org publishes in
 # blender-<ver>.sha256. Bump both together.
-ARG BLENDER_VERSION=5.2.2
-ARG BLENDER_SHA256=84098912789dc450e95697c4184fb8a90acbe5111c2ba4aede3fecb57806a168
+ARG BLENDER_VERSION=5.2.4
+ARG BLENDER_SHA256=2fd14c50987426897ba60237ee996edf2b4151f4b1a72a460ca20be58c1d2d86
 RUN set -eux; \
     major_minor="${BLENDER_VERSION%.*}"; \
     curl -fsSL -o /tmp/blender.tar.xz \
