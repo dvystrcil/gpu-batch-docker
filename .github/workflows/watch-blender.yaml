@@ -1,0 +1,136 @@
+# Keep the Blender pin current (homelab#1939).
+#
+# Renovate has no Blender datasource, and blender.org publishes no GitHub
+# releases, so homelab's watch-upstream-releases can't see it either. This asks
+# download.blender.org daily. bin/watch-blender.py:
+#   - moves BLENDER_VERSION and BLENDER_SHA256 together to the newest patch of
+#     the pinned series (5.2.x), the sha256 copied from blender.org's own
+#     blender-<ver>.sha256, and this opens a PR;
+#   - reports a newer series (5.3, 6.0) as NEWER-SERIES, and this opens an
+#     issue. A series is never bumped here: a Cycles change can alter renders.
+# The PR WAITS FOR A HUMAN, like flathub-bump's: a patch can still move a
+# render. The branch is update/..., not bump/..., so homelab's auto-merge gate
+# (bump/<name>-<semver>) never matches it.
+#
+# The PR is opened with the CICD App's token, not GITHUB_TOKEN: a PR opened
+# with GITHUB_TOKEN triggers no workflows, so build.yaml (which builds the
+# blender stage and checks the tarball against the new sha) would never run.
+# The issue needs no workflow, so GITHUB_TOKEN opens it.
+
+name: watch-blender
+
+on:
+  schedule:
+    - cron: '41 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: gpu-batch-docker-runner
+    steps:
+      # One named secret per step, never the whole store.
+      - name: Fetch the CICD App client id
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: CICD_APP_CLIENT_ID
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - name: Fetch the CICD App private key
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: prod
+          project-slug: homelab-bz-gt
+          secret-path: /
+          secret-name: CICD_APP_PRIVATE_KEY
+          export-type: env
+          domain: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080
+
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        id: app-token
+        with:
+          client-id: ${{ env.CICD_APP_CLIENT_ID }}
+          private-key: ${{ env.CICD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: gpu-batch-docker
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.14'
+
+      # Exit 2 (blender.org unreachable, or no single well-formed sha256 for the
+      # new tarball) fails the run and writes nothing.
+      - name: Ask blender.org
+        id: watch
+        run: |
+          set -euo pipefail
+          python3 bin/watch-blender.py | tee watch.out
+          echo "result=$(tail -n 1 watch.out)" >> "$GITHUB_OUTPUT"
+
+      - name: Report a newer series (an issue, never a bump)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # HEAD's pin, not the working tree's: a patch bump above already edited it.
+          PINNED=$(git show HEAD:Dockerfile | sed -n 's/^ARG BLENDER_VERSION=//p')
+          { grep '^NEWER-SERIES ' watch.out || true; } | while read -r _ SERIES LATEST; do
+            TITLE="Blender ${SERIES} is out: move the image off ${PINNED%.*}?"
+            # Any state: one report per series. A human who closed it decided.
+            if [ -n "$(gh issue list --state all --search "\"Blender ${SERIES} is out\" in:title" --json number --jq '.[].number')" ]; then
+              echo "::notice::Blender ${SERIES} was already reported"; continue
+            fi
+            gh issue create --title "$TITLE" --body "watch-blender found Blender **${LATEST}** on https://download.blender.org/release/Blender${SERIES}/. The image pins **${PINNED}** (series ${PINNED%.*}), and patches of that series keep arriving as PRs.
+
+          A new series is never bumped automatically: a Cycles change can alter renders. To move it, a human:
+          - [ ] reads the release notes (Cycles, Python API, GPU/driver requirements)
+          - [ ] sets \`BLENDER_VERSION\` and \`BLENDER_SHA256\` from https://download.blender.org/release/Blender${SERIES}/blender-${LATEST}.sha256 (the linux-x64 line), plus sources.json and the docs
+          - [ ] re-runs the node-03 render diff (https://github.com/dvystrcil/homelab/issues/1935 AC1)
+
+          Refs https://github.com/dvystrcil/homelab/issues/1939"
+          done
+
+      - name: Open the PR (it waits for a human)
+        if: startsWith(steps.watch.outputs.result, 'BUMPED ')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RESULT: ${{ steps.watch.outputs.result }}
+        run: |
+          set -euo pipefail
+          NEW=$(awk '{print $5}' <<< "$RESULT")
+          SERIES=${NEW%.*}
+          BR="update/blender-${NEW}"
+          if git ls-remote --exit-code --heads origin "$BR" >/dev/null; then
+            echo "::notice::$BR is already open"; exit 0
+          fi
+          git config user.name "watch-blender"
+          git config user.email "noreply@sirddail.net"
+          git checkout -b "$BR"
+          git add Dockerfile sources.json README.md docs/using-the-batch-tools.md
+          git commit -qm "build: ${RESULT#BUMPED }"
+          git push -q origin "$BR"
+          gh pr create --head "$BR" --title "build: ${RESULT#BUMPED }" --body "blender.org has a newer ${SERIES} patch. \`bin/watch-blender.py\` moved the version and the sha256 together; nothing else changed.
+
+          The sha256 is the linux-x64 line of https://download.blender.org/release/Blender${SERIES}/blender-${NEW}.sha256, copied, not computed. build.yaml's image build downloads the tarball and checks it against that sha.
+
+          **This PR waits for a human.** Before merging:
+          - [ ] build.yaml is green (the blender stage built and the sha256 matched)
+          - [ ] the node-03 render diff shows no change you didn't expect (https://github.com/dvystrcil/homelab/issues/1935 AC1)
+
+          Refs https://github.com/dvystrcil/homelab/issues/1939"
+          gh pr edit "$BR" --add-label needs-render-diff || echo "::warning::could not label the PR needs-render-diff"
