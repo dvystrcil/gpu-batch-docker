@@ -241,10 +241,12 @@ jobs:
   #     Harbor, so it only runs on push to main and dispatch). A skip is only
   #     accepted on pull_request.
   # A cancelled, failed or unexpectedly skipped need fails this job.
+  # It only reads needs.*.result, so it runs on a GitHub-hosted runner
+  # (homelab#2377); compose-test, build-image and release stay on ARC.
   build:
     needs: [compose-test, build-image]
     if: always()
-    runs-on: gpu-batch-docker-runner
+    runs-on: ubuntu-latest
     permissions: {}
     steps:
       - name: Every needed job passed
