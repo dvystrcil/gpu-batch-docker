@@ -215,8 +215,11 @@ jobs:
         run: |
           IMG="${INTERNAL_REGISTRY}/${PROJECT}/${{ matrix.image }}:sha-${GITHUB_SHA}"
           case "${{ matrix.target }}" in
-            blender) docker run --rm --entrypoint blender "$IMG" --version | tee v.out
-                     grep -q '^Blender 5\.2\.' v.out ;;
+            # From the Dockerfile, like the slicers: watch-blender moves the pin,
+            # and a literal series here failed the first 5.3 build on main (#39).
+            blender) V=$(sed -n 's/^ARG BLENDER_VERSION=//p' Dockerfile | sort -u)
+                     docker run --rm --entrypoint blender "$IMG" --version | tee v.out
+                     [[ "$(head -n 1 v.out)" == "Blender ${V}" ]] ;;
             freecad) docker run --rm --entrypoint freecadcmd "$IMG" --version | tee v.out
                      grep -q '^FreeCAD 26\.3\.' v.out ;;
             # The slicers' versions come from the Dockerfile, which flathub-bump
