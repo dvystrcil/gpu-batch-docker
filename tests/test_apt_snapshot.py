@@ -93,3 +93,58 @@ def test_compose_test_runs_the_blocked_mirror_test_and_checks_it_finished():
     assert "bin/apt-snapshot-test.sh | tee apt-snapshot-test.out" in job
     assert 'test "$(tail -n 1 apt-snapshot-test.out)" = APT-SNAPSHOT-TEST-OK' in job
     assert job.index("apt-snapshot-test.sh") < job.index("- name: Build the images")
+
+
+# The pin is for the build only (director decision, homelab#1981, 2026-11-19).
+# In CI APT_SNAPSHOT_BASE is the apt-cacher-ng Service: left in a shipped image,
+# a runtime apt-get would read the CI runners' cache, frozen at the build
+# snapshot, and outside the cluster it can't resolve at all. So ubuntu-snapshot
+# keeps the stock ubuntu.sources aside, and every final stage puts it back after
+# its last apt step. bin/apt-snapshot-test.sh checks the built images.
+ORIG = "/etc/apt/ubuntu.sources.orig"
+SOURCES = "/etc/apt/sources.list.d/ubuntu.sources"
+
+
+def _final_stages() -> list[str]:
+    """Stages nothing else builds on (FROM, COPY --from, mount from=): the images."""
+    stages = _stages()
+    used = {parent for parent, _ in stages.values()}
+    used |= set(re.findall(r"(?:--from=|from=)([\w.-]+)", DOCKERFILE))
+    return [n for n in stages if n not in used]
+
+
+def _published_targets() -> list[str]:
+    return re.findall(r"^\s+- target: (\S+)$", _job("build-image"), re.M)
+
+
+def test_ubuntu_snapshot_keeps_the_stock_sources_before_pinning():
+    snap = _stages()["ubuntu-snapshot"][1]
+    backup = f"cp {SOURCES} {ORIG}"
+    assert backup in snap, "ubuntu-snapshot must keep the stock ubuntu.sources"
+    assert snap.index(backup) < snap.index("sed -i"), "the backup must come before the rewrite"
+    assert not ORIG.startswith("/etc/apt/sources.list.d/"), "apt would read the backup"
+
+
+def test_every_published_target_is_a_final_stage():
+    published = _published_targets()
+    assert len(published) >= 4, published
+    finals = _final_stages()
+    for t in published:
+        assert t in finals, f"{t} is published but another stage builds on it: {finals}"
+
+
+def test_every_final_stage_restores_the_stock_sources_after_its_last_apt_step():
+    stages = _stages()
+    finals = _final_stages()
+    assert len(finals) >= 5, finals   # runner + the four tools
+    for name in finals:
+        body = stages[name][1]
+        restore = f"mv {ORIG} {SOURCES}"
+        assert body.count(restore) == 1, f"{name}: no restore of the stock ubuntu.sources"
+        at = body.index(restore)
+        assert body.rfind("apt-get") < at, f"{name}: apt runs after the stock sources are back"
+        step = body[at:body.index("\n\n", at) if "\n\n" in body[at:] else len(body)]
+        assert "rm -rf /var/lib/apt/lists/*" in step, f"{name}: lists from the pinned source ship"
+        assert "archive.ubuntu.com" in step and "apt-cacher-ng" in step, f"{name}: restore isn't checked"
+        user = body.rfind("\nUSER 1000")
+        assert user == -1 or at < user, f"{name}: restore must run as root, before USER 1000"
