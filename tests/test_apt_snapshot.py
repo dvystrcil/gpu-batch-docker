@@ -148,3 +148,12 @@ def test_every_final_stage_restores_the_stock_sources_after_its_last_apt_step():
         assert "archive.ubuntu.com" in step and "apt-cacher-ng" in step, f"{name}: restore isn't checked"
         user = body.rfind("\nUSER 1000")
         assert user == -1 or at < user, f"{name}: restore must run as root, before USER 1000"
+
+
+def test_the_built_image_test_checks_every_published_target():
+    script = (ROOT / "bin/apt-snapshot-test.sh").read_text()
+    m = re.search(r'APT_TEST_TARGETS:-([^}]*)\}', script)
+    assert m, "bin/apt-snapshot-test.sh has no default APT_TEST_TARGETS"
+    targets = m.group(1).split()
+    assert set(_published_targets()) <= set(targets), (targets, _published_targets())
+    assert set(targets) == set(_final_stages()), (targets, _final_stages())
