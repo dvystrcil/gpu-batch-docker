@@ -15,19 +15,61 @@
 # with the same three COPY lines as the others,
 # plus a build step, not a new repo.
 
+# apt reads a pinned Ubuntu snapshot, never the live mirror (homelab#1981, D-051;
+# design and tests: dvystrcil/homelab architecture/apt-snapshot-image-builds.md).
+# A mirror mid-sync can't fail a build, and the package set depends on
+# APT_SNAPSHOT, not on the minute the build ran.
+#   - The pin is the repository itself: ubuntu.sources' URIs point at
+#     <APT_SNAPSHOT_BASE>/<APT_SNAPSHOT>/. Not `--snapshot` or `Snapshot:`: those
+#     still fetch the live mirror alongside the snapshot (the doc's trap 1).
+#   - Every `apt-get update` is `--error-on=any -o Acquire::Retries=3`. Without
+#     --error-on=any an unreachable source is a warning, apt keeps going on
+#     whatever lists it has, and the error surfaces later or not at all.
+#   - APT_SNAPSHOT is written once, here. The weekly bump job edits this line.
+#   - APT_SNAPSHOT_BASE defaults to snapshot.ubuntu.com direct (local and
+#     GitHub-hosted builds). In-cluster CI passes the apt-cacher-ng form,
+#     http://apt-cacher-ng.arc-runner.svc.cluster.local:3142/HTTPS///snapshot.ubuntu.com/ubuntu.
+#     The URL names the cache, so if the cache is down the build fails; nothing
+#     falls back to the live mirror or to the snapshot direct.
+#   - Every stage that runs apt is FROM ubuntu-snapshot, or FROM a stage that is
+#     (tests/test_apt_snapshot.py). bin/apt-snapshot-test.sh proves it builds with
+#     the live mirror blocked and fails clearly with the snapshot source blocked.
+ARG APT_SNAPSHOT=20261119T000000Z
+ARG APT_SNAPSHOT_BASE=https://snapshot.ubuntu.com/ubuntu
+
+# TLS bootstrap (the doc's trap 3): ubuntu:26.04 ships no CA certificates, so
+# its first HTTPS fetch from the snapshot can't verify the server. Only
+# ca-certificates is fetched with a borrowed bundle, from this digest-pinned
+# image, passed as Acquire::https::CaInfo (the doc's tested recipe) on a
+# build-time mount, so the bundle never lands in a layer. After that, apt uses
+# Ubuntu's own bundle. The bundle only authenticates the connection: apt still
+# checks every index against the Ubuntu archive key (Signed-By in ubuntu.sources).
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS bootstrap-ca
+
+FROM ubuntu:26.04 AS ubuntu-snapshot
+ARG APT_SNAPSHOT
+ARG APT_SNAPSHOT_BASE
+RUN --mount=type=bind,from=bootstrap-ca,source=/etc/ssl/certs/ca-certificates.crt,target=/run/bootstrap-ca.crt \
+    sed -i -E "s|^URIs: .*|URIs: ${APT_SNAPSHOT_BASE}/${APT_SNAPSHOT}/|" /etc/apt/sources.list.d/ubuntu.sources \
+ && test "$(grep -c '^URIs: ' /etc/apt/sources.list.d/ubuntu.sources)" -ge 1 \
+ && ! grep -rsE '^ *(deb |URIs:).*(archive|security)\.ubuntu\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ \
+ && apt-get update --error-on=any -o Acquire::Retries=3 -o Acquire::https::CaInfo=/run/bootstrap-ca.crt \
+ && apt-get install -y --no-install-recommends -o Acquire::https::CaInfo=/run/bootstrap-ca.crt ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 # Layer order is for the cache (gpu-batch-docker#27). `base` holds only Ubuntu
 # packages, and every tool stage does its big downloads on top of it. Our own
 # files (the runner code, LICENSE, sources.json) are copied LAST in each image,
 # so a code change or a flathub-bump (which edits sources.json) rebuilds a few
 # small layers, never Blender, FreeCAD or the Flathub apps. Never COPY a repo
 # file into `base`: it would invalidate every download below it.
-FROM ubuntu:26.04 AS base
+FROM ubuntu-snapshot AS base
 
 # psql: the guard's Obico tie-breaker (read-only role, column-level grant).
 # ca-certificates: the in-cluster API read of that role's Secret.
 # /licenses: each tool stage links its licence texts in here
 # (docs/using-the-batch-tools.md, gap 2); Ubuntu's own are /usr/share/doc/*/copyright.
-RUN apt-get update \
+RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /licenses
@@ -59,7 +101,7 @@ FROM base AS blender
 USER root
 # X/GL runtime libs Blender links against even in background mode. This is
 # the set the 2026-11-05 probe on node-03 needed; nothing more.
-RUN apt-get update \
+RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends \
       libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libice6 \
       libgl1 libegl1 libglu1-mesa libxext6 xz-utils curl \
@@ -104,7 +146,7 @@ FROM base AS freecad
 # for the one GUI-mode export (render_full.sh's export_meshes.py).
 # CPU-only: runs on max-01, so no NVIDIA env.
 USER root
-RUN apt-get update \
+RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends \
       xvfb xauth libgl1 libegl1 libglu1-mesa libx11-6 libxext6 libxrender1 libxi6 \
       libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 curl git \
@@ -179,13 +221,13 @@ USER 1000:1000
 # (`flatpak info com.prusa3d.PrusaSlicer` / `org.gnome.Platform//50`), so a
 # cluster slice is byte-comparable with a laptop slice. Bump all four
 # together; Renovate can't see Flathub.
-FROM ubuntu:26.04 AS prusaslicer-fetch
+FROM ubuntu-snapshot AS prusaslicer-fetch
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG PRUSASLICER_VERSION=2.9.7
 ARG PRUSASLICER_COMMIT=22caa5995fef8170cbed1d404f993996e5552e47159391666a7b096a85d8f641
 ARG GNOME_RUNTIME=50
 ARG GNOME_RUNTIME_COMMIT=4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067
-RUN apt-get update \
+RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends flatpak ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
@@ -213,7 +255,7 @@ FROM base AS prusaslicer
 # The binary runs on the runtime's own loader and libs, never Ubuntu's.
 # rsvg-convert: slice-check.py turns its G-code plot (SVG) into the PNG preview.
 USER root
-RUN apt-get update \
+RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends librsvg2-bin \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=prusaslicer-fetch /out/app /opt/prusaslicer/app
@@ -246,13 +288,13 @@ USER 1000:1000
 # byte-comparable with a laptop slice (AC5), and it runs on the very GNOME 50
 # runtime commit the PrusaSlicer stage already pins. Same mechanics as
 # prusaslicer-fetch: install with flatpak, pin both ostree commits, copy files.
-FROM ubuntu:26.04 AS orcaslicer-fetch
+FROM ubuntu-snapshot AS orcaslicer-fetch
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ORCASLICER_VERSION=2.5.1
 ARG ORCASLICER_COMMIT=edc269f43f06c1a0a63abb1f61d2d28e69316f895722121288153296430f6c01
 ARG GNOME_RUNTIME=50
 ARG GNOME_RUNTIME_COMMIT=4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067
-RUN apt-get update \
+RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends flatpak ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
@@ -289,7 +331,7 @@ FROM base AS orcaslicer
 # (matched by file identity). `orca-datadir <dir> <Vendor>...` lays out the
 # system half. rsvg-convert: slice-check.py's G-code plot.
 USER root
-RUN apt-get update \
+RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends librsvg2-bin \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=orcaslicer-fetch /out/app /app
