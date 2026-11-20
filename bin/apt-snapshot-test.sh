@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Blocked-mirror build test for the apt snapshot pin (homelab#1981 AC3, D-051).
 #
-# Builds the Dockerfile's `base` stage twice, with --no-cache so apt really runs:
+# Builds the Dockerfile's `base` stage twice, with --no-cache so apt really runs,
+# then every final image once:
 #
 #   1. mirror-blocked  archive.ubuntu.com and security.ubuntu.com resolve to
 #                      127.0.0.1 inside every RUN step. The build must still
@@ -11,6 +12,12 @@
 #                      snapshot.ubuntu.com, or the apt-cacher-ng Service in CI) is
 #                      blocked the same way. The build must FAIL, with apt's own
 #                      error in the log, and without falling back to the live mirror.
+#   3. shipped-sources the pin is for the build only (homelab#1981, 2026-11-19).
+#                      Each final image (APT_TEST_TARGETS) must ship the stock
+#                      ubuntu.sources: archive.ubuntu.com, no snapshot source, no
+#                      apt-cacher-ng, no apt lists. Built WITH the cache and the same
+#                      build args as build.yaml's "Build the images" step, so that
+#                      step reuses these layers from the daemon's cache.
 #
 # Why --add-host: it is a build flag, so it reaches the RUN containers through the
 # daemon on any runner. On the ARC DinD runner the daemon is a sidecar that can't
@@ -20,8 +27,11 @@
 #   APT_SNAPSHOT_BASE  passed as --build-arg when set (CI passes the cache URL).
 #                      Unset = the Dockerfile's default, snapshot.ubuntu.com direct.
 #   DPKG_OUT           optional: write the built image's `dpkg-query -W` here.
+#   APT_TEST_TARGETS   case 3's final images (default: runner and the four tools).
+#   INTERNAL_REGISTRY, PROJECT  when set (build.yaml's env), case 3 reads the
+#                      Harbor :buildcache refs, as the image builds do.
 #
-# Prints APT-SNAPSHOT-TEST-OK as its last line only if both cases held.
+# Prints APT-SNAPSHOT-TEST-OK as its last line only if all three cases held.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -86,6 +96,35 @@ else
     echo "   ok"
   fi
 fi
+
+echo "== case 3: every final image ships the stock apt sources"
+read -r -a targets <<<"${APT_TEST_TARGETS:-runner blender freecad prusaslicer orcaslicer}"
+for t in "${targets[@]}"; do
+  cache=()
+  if [ -n "${INTERNAL_REGISTRY:-}" ] && [ -n "${PROJECT:-}" ]; then
+    c=$t; [ "$t" = runner ] && c=blender   # runner has no cache ref of its own
+    cache=(--cache-from "type=registry,ref=${INTERNAL_REGISTRY}/${PROJECT}/gpu-batch-${c}:buildcache")
+  fi
+  timg="gpu-batch-apt-snapshot-test-${t}:ci"
+  if ! docker buildx build --builder default --progress=plain --target "$t" "${args[@]}" "${cache[@]}" \
+      -t "$timg" . >"$LOGDIR/3-$t.log" 2>&1; then
+    echo "FAIL: case 3 could not build $t"; fail=1; tail -n 20 "$LOGDIR/3-$t.log"; continue
+  fi
+  docker run --rm --user 0 --entrypoint sh "$timg" -c \
+    'cat /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null; echo "lists: $(ls -A /var/lib/apt/lists)"' \
+    >"$LOGDIR/3-$t.sources" 2>&1 || true
+  docker image rm -f "$timg" >/dev/null 2>&1 || true
+  bad=$(grep -nE "apt-cacher-ng|snapshot\.ubuntu\.com|${src_host//./\\.}" "$LOGDIR/3-$t.sources" || true)
+  if [ -n "$bad" ]; then
+    echo "FAIL: $t ships the build-time apt source:"; printf '   %s\n' "$bad"; fail=1
+  elif ! grep -qE '^URIs: http://archive\.ubuntu\.com/' "$LOGDIR/3-$t.sources"; then
+    echo "FAIL: $t has no stock archive.ubuntu.com source"; fail=1; cat "$LOGDIR/3-$t.sources"
+  elif ! grep -qx 'lists: ' "$LOGDIR/3-$t.sources"; then
+    echo "FAIL: $t ships apt lists: $(grep '^lists: ' "$LOGDIR/3-$t.sources")"; fail=1
+  else
+    echo "   $t: ok"
+  fi
+done
 
 docker image rm -f "$IMG" >/dev/null 2>&1 || true
 [ "$fail" -eq 0 ] || exit 1

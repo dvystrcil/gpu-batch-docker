@@ -31,6 +31,11 @@
 #     http://apt-cacher-ng.arc-runner.svc.cluster.local:3142/HTTPS///snapshot.ubuntu.com/ubuntu.
 #     The URL names the cache, so if the cache is down the build fails; nothing
 #     falls back to the live mirror or to the snapshot direct.
+#   - The pin is for the build only. ubuntu-snapshot keeps the stock
+#     ubuntu.sources at /etc/apt/ubuntu.sources.orig (outside sources.list.d, so
+#     apt ignores it), and every final stage moves it back after its last apt
+#     step and drops the lists: a shipped image's apt reads archive.ubuntu.com,
+#     never the CI cache or the snapshot.
 #   - Every stage that runs apt is FROM ubuntu-snapshot, or FROM a stage that is
 #     (tests/test_apt_snapshot.py). bin/apt-snapshot-test.sh proves it builds with
 #     the live mirror blocked and fails clearly with the snapshot source blocked.
@@ -50,7 +55,8 @@ FROM ubuntu:26.04 AS ubuntu-snapshot
 ARG APT_SNAPSHOT
 ARG APT_SNAPSHOT_BASE
 RUN --mount=type=bind,from=bootstrap-ca,source=/etc/ssl/certs/ca-certificates.crt,target=/run/bootstrap-ca.crt \
-    sed -i -E "s|^URIs: .*|URIs: ${APT_SNAPSHOT_BASE}/${APT_SNAPSHOT}/|" /etc/apt/sources.list.d/ubuntu.sources \
+    cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/ubuntu.sources.orig \
+ && sed -i -E "s|^URIs: .*|URIs: ${APT_SNAPSHOT_BASE}/${APT_SNAPSHOT}/|" /etc/apt/sources.list.d/ubuntu.sources \
  && test "$(grep -c '^URIs: ' /etc/apt/sources.list.d/ubuntu.sources)" -ge 1 \
  && ! grep -rsE '^ *(deb |URIs:).*(archive|security)\.ubuntu\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ \
  && apt-get update --error-on=any -o Acquire::Retries=3 -o Acquire::https::CaInfo=/run/bootstrap-ca.crt \
@@ -89,6 +95,14 @@ ENTRYPOINT ["python3", "-m", "gpu_batch.runner"]
 
 
 FROM base AS runner
+# Ship the stock apt sources: the snapshot pin is for the build only (homelab#1981).
+# Left in, a runtime apt-get would read the CI runners' apt-cacher-ng (frozen at
+# the build snapshot, and unresolvable outside the cluster). Last apt step above.
+RUN mv /etc/apt/ubuntu.sources.orig /etc/apt/sources.list.d/ubuntu.sources \
+ && rm -rf /var/lib/apt/lists/* \
+ && grep -q '^URIs: http://archive.ubuntu.com/' /etc/apt/sources.list.d/ubuntu.sources \
+ && ! grep -rsE 'apt-cacher-ng|snapshot\.ubuntu\.com' /etc/apt/sources.list /etc/apt/sources.list.d/
+
 COPY src/gpu_batch /opt/gpu-batch/gpu_batch
 COPY LICENSE /licenses/gpu-batch-docker/LICENSE
 COPY sources.json /licenses/sources.json
@@ -131,6 +145,14 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility \
 LABEL org.opencontainers.image.title="gpu-batch-blender" \
       org.opencontainers.image.description="Blender (official build) for headless Cycles renders, under the gpu-batch runner. Licences: /licenses" \
       org.opencontainers.image.licenses="MIT AND GPL-3.0-or-later"
+
+# Ship the stock apt sources: the snapshot pin is for the build only (homelab#1981).
+# Left in, a runtime apt-get would read the CI runners' apt-cacher-ng (frozen at
+# the build snapshot, and unresolvable outside the cluster). Last apt step above.
+RUN mv /etc/apt/ubuntu.sources.orig /etc/apt/sources.list.d/ubuntu.sources \
+ && rm -rf /var/lib/apt/lists/* \
+ && grep -q '^URIs: http://archive.ubuntu.com/' /etc/apt/sources.list.d/ubuntu.sources \
+ && ! grep -rsE 'apt-cacher-ng|snapshot\.ubuntu\.com' /etc/apt/sources.list /etc/apt/sources.list.d/
 
 # Our files last: changing them never invalidates the downloads above.
 COPY src/gpu_batch /opt/gpu-batch/gpu_batch
@@ -201,6 +223,14 @@ ENV FREECAD_APPIMAGE=/opt/freecad/AppRun \
 LABEL org.opencontainers.image.title="gpu-batch-freecad" \
       org.opencontainers.image.description="FreeCAD (official AppImage) + Fasteners workbench for headless CAD jobs, under the gpu-batch runner. Licences: /licenses" \
       org.opencontainers.image.licenses="MIT AND LGPL-2.1-or-later"
+
+# Ship the stock apt sources: the snapshot pin is for the build only (homelab#1981).
+# Left in, a runtime apt-get would read the CI runners' apt-cacher-ng (frozen at
+# the build snapshot, and unresolvable outside the cluster). Last apt step above.
+RUN mv /etc/apt/ubuntu.sources.orig /etc/apt/sources.list.d/ubuntu.sources \
+ && rm -rf /var/lib/apt/lists/* \
+ && grep -q '^URIs: http://archive.ubuntu.com/' /etc/apt/sources.list.d/ubuntu.sources \
+ && ! grep -rsE 'apt-cacher-ng|snapshot\.ubuntu\.com' /etc/apt/sources.list /etc/apt/sources.list.d/
 
 # Our files last: changing them never invalidates the downloads above.
 COPY src/gpu_batch /opt/gpu-batch/gpu_batch
@@ -273,6 +303,14 @@ RUN set -eux; \
 
 ARG PRUSASLICER_VERSION=2.9.7
 ENV PRUSASLICER_VERSION=${PRUSASLICER_VERSION}
+
+# Ship the stock apt sources: the snapshot pin is for the build only (homelab#1981).
+# Left in, a runtime apt-get would read the CI runners' apt-cacher-ng (frozen at
+# the build snapshot, and unresolvable outside the cluster). Last apt step above.
+RUN mv /etc/apt/ubuntu.sources.orig /etc/apt/sources.list.d/ubuntu.sources \
+ && rm -rf /var/lib/apt/lists/* \
+ && grep -q '^URIs: http://archive.ubuntu.com/' /etc/apt/sources.list.d/ubuntu.sources \
+ && ! grep -rsE 'apt-cacher-ng|snapshot\.ubuntu\.com' /etc/apt/sources.list /etc/apt/sources.list.d/
 
 # Our files last: changing them never invalidates the downloads above.
 COPY src/gpu_batch /opt/gpu-batch/gpu_batch
@@ -351,6 +389,14 @@ RUN set -eux; \
 
 ARG ORCASLICER_VERSION=2.5.1
 ENV ORCASLICER_VERSION=${ORCASLICER_VERSION}
+
+# Ship the stock apt sources: the snapshot pin is for the build only (homelab#1981).
+# Left in, a runtime apt-get would read the CI runners' apt-cacher-ng (frozen at
+# the build snapshot, and unresolvable outside the cluster). Last apt step above.
+RUN mv /etc/apt/ubuntu.sources.orig /etc/apt/sources.list.d/ubuntu.sources \
+ && rm -rf /var/lib/apt/lists/* \
+ && grep -q '^URIs: http://archive.ubuntu.com/' /etc/apt/sources.list.d/ubuntu.sources \
+ && ! grep -rsE 'apt-cacher-ng|snapshot\.ubuntu\.com' /etc/apt/sources.list /etc/apt/sources.list.d/
 
 # Our files last: changing them never invalidates the downloads above.
 COPY src/gpu_batch /opt/gpu-batch/gpu_batch
