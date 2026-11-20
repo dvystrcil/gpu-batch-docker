@@ -30,6 +30,11 @@ concurrency:
 env:
   INTERNAL_REGISTRY: harbor-core.harbor.svc.cluster.local
   PROJECT: ai
+  # apt reads the pinned Ubuntu snapshot through the in-cluster apt-cacher-ng
+  # (homelab#1981, D-051). The URL names the cache, so a cache outage fails the
+  # build; it never falls back to the live mirror. Every build below passes it,
+  # so compose-test and build-image share one layer cache.
+  APT_SNAPSHOT_BASE: http://apt-cacher-ng.arc-runner.svc.cluster.local:3142/HTTPS///snapshot.ubuntu.com/ubuntu
 
 jobs:
   # Build every image and RUN them chained, before anything is pushed: a
@@ -96,15 +101,24 @@ jobs:
       # it. The runner stage has no cache ref of its own: every tool image's
       # mode=max cache holds its layers. A cache that can't be read is a slower
       # build, not a red CI.
+      # homelab#1981 AC3: with archive/security.ubuntu.com unreachable the base
+      # stage still builds from the snapshot (via the cache), and with the cache
+      # unreachable it fails with apt's error instead of falling back.
+      - name: Blocked-mirror apt test
+        run: bin/apt-snapshot-test.sh | tee apt-snapshot-test.out
+
+      - name: Assert the apt test completed
+        run: test "$(tail -n 1 apt-snapshot-test.out)" = APT-SNAPSHOT-TEST-OK
+
       - name: Build the images
         run: |
           set -euo pipefail
           cache() { echo "type=registry,ref=${INTERNAL_REGISTRY}/${PROJECT}/gpu-batch-$1:buildcache"; }
           for t in runner freecad prusaslicer orcaslicer blender; do
             if [ "$t" = runner ]; then
-              docker buildx build --builder default --target runner -t gpu-batch-runner:ci --cache-from "$(cache blender)" .
+              docker buildx build --builder default --target runner -t gpu-batch-runner:ci --build-arg "APT_SNAPSHOT_BASE=${APT_SNAPSHOT_BASE}" --cache-from "$(cache blender)" .
             else
-              docker buildx build --builder default --target "$t" -t "gpu-batch-$t:ci" --cache-from "$(cache "$t")" .
+              docker buildx build --builder default --target "$t" -t "gpu-batch-$t:ci" --build-arg "APT_SNAPSHOT_BASE=${APT_SNAPSHOT_BASE}" --cache-from "$(cache "$t")" .
             fi
           done
 
@@ -202,6 +216,8 @@ jobs:
           target: ${{ matrix.target }}
           # amd64 only: every upstream build (Blender tarball, FreeCAD AppImage, the slicers' Flathub x86_64 refs) is x86-64.
           platforms: linux/amd64
+          build-args: |
+            APT_SNAPSHOT_BASE=${{ env.APT_SNAPSHOT_BASE }}
           push: true
           tags: |
             ${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ matrix.image }}:dev
