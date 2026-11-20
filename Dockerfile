@@ -256,7 +256,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG PRUSASLICER_VERSION=2.9.7
 ARG PRUSASLICER_COMMIT=22caa5995fef8170cbed1d404f993996e5552e47159391666a7b096a85d8f641
 ARG GNOME_RUNTIME=50
-ARG GNOME_RUNTIME_COMMIT=4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067
+ARG GNOME_RUNTIME_COMMIT=586747ee14069a04d9cb8a39909501cd0f792e1718d244b32ce6d33c288184c6
 RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends flatpak ca-certificates \
  && rm -rf /var/lib/apt/lists/*
@@ -331,7 +331,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ORCASLICER_VERSION=2.5.1
 ARG ORCASLICER_COMMIT=edc269f43f06c1a0a63abb1f61d2d28e69316f895722121288153296430f6c01
 ARG GNOME_RUNTIME=50
-ARG GNOME_RUNTIME_COMMIT=4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067
+ARG GNOME_RUNTIME_COMMIT=586747ee14069a04d9cb8a39909501cd0f792e1718d244b32ce6d33c288184c6
 RUN apt-get update --error-on=any -o Acquire::Retries=3 \
  && apt-get install -y --no-install-recommends flatpak ca-certificates \
  && rm -rf /var/lib/apt/lists/*
