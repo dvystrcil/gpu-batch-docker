@@ -26,10 +26,10 @@
        "source": "https://github.com/prusa3d/PrusaSlicer/archive/refs/tags/version_2.9.7.tar.gz",
        "recipe": "https://github.com/flathub/com.prusa3d.PrusaSlicer/archive/d541f9d7a0f7.tar.gz",
        "notes": "the Flathub manifest the pinned ostree commit was built from (its commit subject names d541f9d7a0f7); it lists every bundled library's source"},
-      {"name": "GNOME runtime 50 (libraries only)", "version": "50.6-18-g0ed65ce92", "license": "mostly LGPL/GPL, per /licenses/gnome-runtime",
-       "pins": ["4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067"],
-       "source": "https://gitlab.gnome.org/GNOME/gnome-build-meta/-/archive/0ed65ce92/gnome-build-meta-0ed65ce92.tar.gz",
-       "notes": "the pinned runtime commit's subject is 'Build of the GNOME Runtime from: 50.6-18-g0ed65ce92'; gnome-build-meta at that commit names every component's source"}
+      {"name": "GNOME runtime 50 (libraries only)", "version": "50.6-20-ged6b9fd8a", "license": "mostly LGPL/GPL, per /licenses/gnome-runtime",
+       "pins": ["586747ee14069a04d9cb8a39909501cd0f792e1718d244b32ce6d33c288184c6"],
+       "source": "https://gitlab.gnome.org/GNOME/gnome-build-meta/-/archive/ed6b9fd8a/gnome-build-meta-ed6b9fd8a.tar.gz",
+       "notes": "the pinned runtime commit's subject is 'Build of the GNOME Runtime from: 50.6-20-ged6b9fd8a'; gnome-build-meta at that commit names every component's source"}
     ],
     "orcaslicer": [
       {"name": "OrcaSlicer (Flathub build)", "version": "2.5.1", "license": "AGPL-3.0-only",
@@ -37,9 +37,9 @@
        "source": "https://github.com/OrcaSlicer/OrcaSlicer/archive/refs/tags/v2.5.1.tar.gz",
        "recipe": "https://github.com/flathub/com.orcaslicer.OrcaSlicer/archive/34e915f92bf7.tar.gz",
        "notes": "the Flathub manifest the pinned ostree commit was built from (its commit subject names 3436cd519006)"},
-      {"name": "GNOME runtime 50 (libraries only)", "version": "50.6-18-g0ed65ce92", "license": "mostly LGPL/GPL, per /licenses/gnome-runtime",
-       "pins": ["4337a389125f814785bd83f4ace01da5b6baa80fdcf5a9c81e60dcd03896c067"],
-       "source": "https://gitlab.gnome.org/GNOME/gnome-build-meta/-/archive/0ed65ce92/gnome-build-meta-0ed65ce92.tar.gz"}
+      {"name": "GNOME runtime 50 (libraries only)", "version": "50.6-20-ged6b9fd8a", "license": "mostly LGPL/GPL, per /licenses/gnome-runtime",
+       "pins": ["586747ee14069a04d9cb8a39909501cd0f792e1718d244b32ce6d33c288184c6"],
+       "source": "https://gitlab.gnome.org/GNOME/gnome-build-meta/-/archive/ed6b9fd8a/gnome-build-meta-ed6b9fd8a.tar.gz"}
     ]
   }
 }
