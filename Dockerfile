@@ -328,8 +328,8 @@ USER 1000:1000
 # prusaslicer-fetch: install with flatpak, pin both ostree commits, copy files.
 FROM ubuntu-snapshot AS orcaslicer-fetch
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-ARG ORCASLICER_VERSION=2.5.1
-ARG ORCASLICER_COMMIT=edc269f43f06c1a0a63abb1f61d2d28e69316f895722121288153296430f6c01
+ARG ORCASLICER_VERSION=2.5.2
+ARG ORCASLICER_COMMIT=8a73ec66668c3ebb8727867242da39d51ed4d3ccb19c4308bba25ff51436c56a
 ARG GNOME_RUNTIME=50
 ARG GNOME_RUNTIME_COMMIT=586747ee14069a04d9cb8a39909501cd0f792e1718d244b32ce6d33c288184c6
 RUN apt-get update --error-on=any -o Acquire::Retries=3 \
@@ -387,7 +387,7 @@ RUN set -eux; \
       > /usr/local/bin/orca-datadir; \
     chmod 755 /usr/local/bin/orca-slicer /usr/local/bin/orca-datadir
 
-ARG ORCASLICER_VERSION=2.5.1
+ARG ORCASLICER_VERSION=2.5.2
 ENV ORCASLICER_VERSION=${ORCASLICER_VERSION}
 
 # Ship the stock apt sources: the snapshot pin is for the build only (homelab#1981).

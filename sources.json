@@ -32,10 +32,10 @@
        "notes": "the pinned runtime commit's subject is 'Build of the GNOME Runtime from: 50.6-20-ged6b9fd8a'; gnome-build-meta at that commit names every component's source"}
     ],
     "orcaslicer": [
-      {"name": "OrcaSlicer (Flathub build)", "version": "2.5.1", "license": "AGPL-3.0-only",
-       "pins": ["2.5.1", "edc269f43f06c1a0a63abb1f61d2d28e69316f895722121288153296430f6c01"],
-       "source": "https://github.com/OrcaSlicer/OrcaSlicer/archive/refs/tags/v2.5.1.tar.gz",
-       "recipe": "https://github.com/flathub/com.orcaslicer.OrcaSlicer/archive/34e915f92bf7.tar.gz",
+      {"name": "OrcaSlicer (Flathub build)", "version": "2.5.2", "license": "AGPL-3.0-only",
+       "pins": ["2.5.2", "8a73ec66668c3ebb8727867242da39d51ed4d3ccb19c4308bba25ff51436c56a"],
+       "source": "https://github.com/OrcaSlicer/OrcaSlicer/archive/refs/tags/v2.5.2.tar.gz",
+       "recipe": "https://github.com/flathub/com.orcaslicer.OrcaSlicer/archive/df8a25f95336.tar.gz",
        "notes": "the Flathub manifest the pinned ostree commit was built from (its commit subject names 3436cd519006)"},
       {"name": "GNOME runtime 50 (libraries only)", "version": "50.6-20-ged6b9fd8a", "license": "mostly LGPL/GPL, per /licenses/gnome-runtime",
        "pins": ["586747ee14069a04d9cb8a39909501cd0f792e1718d244b32ce6d33c288184c6"],
