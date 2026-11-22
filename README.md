@@ -7,7 +7,7 @@ Build repo for the **GPU batch lane** on the GTX 970 (`k8s-node-03`): fire-and-f
 | `harbor.sirddail.net/ai/gpu-batch-blender` | Ubuntu 26.04, Blender 5.3.0 (official tarball, sha256-pinned), the `gpu_batch` runner, psql |
 | `harbor.sirddail.net/ai/gpu-batch-freecad` | Ubuntu 26.04, FreeCAD 26.3rc2 (official AppImage, sha256-pinned, extracted), Fasteners workbench 0.5.64 (commit-pinned), `xvfb-run`, the `gpu_batch` runner, psql. CPU-only (max-01) |
 | `harbor.sirddail.net/ai/gpu-batch-prusaslicer` | Ubuntu 26.04, PrusaSlicer 2.9.7 (Flathub build, app + GNOME 50 runtime pinned by ostree commit, run without flatpak), `rsvg-convert`, the `gpu_batch` runner, psql. CPU-only (max-01) |
-| `harbor.sirddail.net/ai/gpu-batch-orcaslicer` | Ubuntu 26.04, OrcaSlicer 2.5.1 (Flathub build, the laptop's exact commit, on the same GNOME 50 runtime commit), `orca-datadir`, `rsvg-convert`, the `gpu_batch` runner, psql. CPU-only (max-01). Slices vt350's `slice-check.py` with the Neptune presets ([#13](https://github.com/dvystrcil/gpu-batch-docker/issues/13)) |
+| `harbor.sirddail.net/ai/gpu-batch-orcaslicer` | Ubuntu 26.04, OrcaSlicer 2.5.2 (Flathub build, the laptop's exact commit, on the same GNOME 50 runtime commit), `orca-datadir`, `rsvg-convert`, the `gpu_batch` runner, psql. CPU-only (max-01). Slices vt350's `slice-check.py` with the Neptune presets ([#13](https://github.com/dvystrcil/gpu-batch-docker/issues/13)) |
 
 Deployed by [`dvystrcil/gpu-batch`](https://github.com/dvystrcil/gpu-batch) (Job templates), submitted with `homelab/bin/gpu-batch-submit.py`.
 

@@ -13,7 +13,7 @@ commands and **proves** the job produced what it promised before it reports succ
 |---|---|---|
 | `freecad` | FreeCAD 26.3rc2 + Fasteners workbench 0.5.64, `xvfb-run` | headless model edits, clash checks, mesh/STL export, also GUI-only scripts under a virtual display |
 | `blender` | Blender 5.3.0 | Cycles renders of exported meshes, on an NVIDIA GPU or the CPU |
-| `orcaslicer` | OrcaSlicer 2.5.1 | slice STLs with your own presets; print time and filament statistics |
+| `orcaslicer` | OrcaSlicer 2.5.2 | slice STLs with your own presets; print time and filament statistics |
 | `prusaslicer` | PrusaSlicer 2.9.7 | the same, with PrusaSlicer |
 
 All four share one runner (`src/gpu_batch/runner.py`), so they all behave the same way. You give a job a
@@ -58,7 +58,7 @@ Match the image versions, or your results will differ from anyone else's:
 | FreeCAD | 26.3rc2 (AppImage) | freecad.org downloads; set `FREECAD_APPIMAGE` to the AppImage path |
 | Fasteners workbench | V0.5.64-beta (`85a21e22`) | FreeCAD Addon Manager, or clone at that commit into FreeCAD's `Mod/` |
 | Blender | 5.3.0 | blender.org (the official tarball; the snap tracks newer releases) |
-| OrcaSlicer | 2.5.1 | Flathub or GitHub releases |
+| OrcaSlicer | 2.5.2 | Flathub or GitHub releases |
 | PrusaSlicer | 2.9.7 | Flathub or GitHub releases |
 | Python | 3.14 for the runner; numpy for some scripts | your distro |
 | `xvfb-run` | any | `apt install xvfb`, for FreeCAD scripts that need the GUI |
@@ -245,7 +245,7 @@ asks it every day (06:17 UTC, or run it by hand from the Actions tab):
 
 Why it's built this way: the images pin the same Flathub build the laptop runs, so a slice in the cluster can be
 compared byte for byte with one on the laptop. Flathub updates the laptop on its own, so the images have to follow,
-or the two drift apart. On 2026-11-14 the laptop was already on OrcaSlicer 2.5.1 while the image still pinned 2.5.0.
+or the two drift apart. On 2026-11-14 the laptop was already on OrcaSlicer 2.5.2 while the image still pinned 2.5.0.
 
 ## Where the pieces live
 
