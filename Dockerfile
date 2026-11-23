@@ -39,7 +39,7 @@
 #   - Every stage that runs apt is FROM ubuntu-snapshot, or FROM a stage that is
 #     (tests/test_apt_snapshot.py). bin/apt-snapshot-test.sh proves it builds with
 #     the live mirror blocked and fails clearly with the snapshot source blocked.
-ARG APT_SNAPSHOT=20261119T000000Z
+ARG APT_SNAPSHOT=20261123T210000Z
 ARG APT_SNAPSHOT_BASE=https://snapshot.ubuntu.com/ubuntu
 
 # TLS bootstrap (the doc's trap 3): ubuntu:26.04 ships no CA certificates, so
